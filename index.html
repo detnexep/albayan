@@ -865,7 +865,7 @@
 
     <!-- Footer -->
     <footer class="footer">
-        <p>© ২০২৫ কুরআন বাংলা - ইসলামিক জ্ঞান বাংলাভাষীদের মাঝে ছড়িয়ে দিন</p>
+        <p>© 2025 Al-Bayan - translation is not accurate, read carefully.</p>
         <p style="margin-top: 10px; font-size: 0.9em;">
             
             বাকিয়াহ ইনস্টিটিউট দ্বারা পরিচালিত
@@ -901,7 +901,7 @@
             if (savedKey) {
                 GEMINI_API_KEY = savedKey;
                 document.getElementById('apiKeyInput').value = '••••••••••••••••';
-                updateApiStatus('success', '✅ API কী লোড হয়েছে! আপনি এখন অনুবাদ করতে পারেন।');
+                updateApiStatus('success', '✅ API টি লোড হয়েছে! আপনি এখন অনুবাদ করতে পারেন।');
             }
         }
 
@@ -909,7 +909,7 @@
         function saveApiKey() {
             const apiKey = document.getElementById('apiKeyInput').value.trim();
             if (!apiKey) {
-                alert('দয়া করে একটি বৈধ API কী দিন।');
+                alert('দয়া করে একটি বৈধ API দিন।');
                 return;
             }
 
@@ -921,7 +921,7 @@
             GEMINI_API_KEY = apiKey;
             localStorage.setItem('gemini_api_key', apiKey);
             document.getElementById('apiKeyInput').value = '••••••••••••••••';
-            updateApiStatus('success', '✅ API কী সংরক্ষণ করা হয়েছে! আপনি এখন অনুবাদ করতে পারেন।');
+            updateApiStatus('success', '✅ API টি সংরক্ষণ করা হয়েছে! আপনি এখন অনুবাদ করতে পারেন।');
         }
 
         // Test API Key
@@ -930,7 +930,8 @@
             
             if (!apiKey || apiKey === '••••••••••••••••') {
                 if (!GEMINI_API_KEY) {
-                    alert('দয়া করে প্রথমে একটি API কী দিন।');
+                    alert('দয়া করে প্রথমে একটি API 
+                          দিন।');
                     return;
                 }
                 // Use existing key
@@ -946,9 +947,9 @@
                 if (testResult.includes('API_ERROR')) {
                     throw new Error('API কীটি বৈধ নয়');
                 }
-                updateApiStatus('success', '✅ API কী সঠিক! আপনি এখন অনুবাদ করতে পারেন।');
+                updateApiStatus('success', '✅ API টি সঠিক! আপনি এখন অনুবাদ করতে পারেন।');
             } catch (error) {
-                updateApiStatus('error', '❌ API কী ত্রুটি: ' + error.message);
+                updateApiStatus('error', '❌ API টি ত্রুটি: ' + error.message);
             } finally {
                 hideLoading();
             }
