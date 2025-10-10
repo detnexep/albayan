@@ -3,460 +3,75 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>al bayan </title>
+    <title>Al Bayan | আরবী ইসলামিক বই অনুবাদক</title>
+    <!-- Load Tailwind CSS CDN -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- Load PDF.js -->
     <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.4.120/pdf.min.js"></script>
+    <!-- Load Tesseract.js for OCR -->
     <script src="https://cdn.jsdelivr.net/npm/tesseract.js@4/dist/tesseract.min.js"></script>
+    <!-- Load Font Awesome Icons -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css">
+    <!-- Load Custom Fonts (Hind Siliguri for Bangla, Amiri for Arabic) -->
     <link href="https://fonts.googleapis.com/css2?family=Hind+Siliguri:wght@300;400;500;600;700&display=swap" rel="stylesheet">
     <link href="https://fonts.googleapis.com/css2?family=Amiri:wght@400;700&display=swap" rel="stylesheet">
-    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css">
+
     <style>
+        /* Custom Tailwind Configuration (Setting up primary colors for reuse) */
         :root {
-            --primary: #2E8B57;
-            --primary-dark: #1a5c3a;
-            --primary-light: #4CAF50;
-            --gold: #D4AF37;
-            --gold-dark: #B8860B;
-            --bg-light: #f8f9fa;
-            --bg-white: #ffffff;
-            --text-dark: #2D3748;
-            --text-light: #718096;
-            --border-light: #E2E8F0;
-            --shadow: 0 10px 25px rgba(0,0,0,0.1);
-            --shadow-lg: 0 20px 40px rgba(0,0,0,0.15);
-            --radius: 12px;
-            --radius-lg: 20px;
+            --color-primary: #2E8B57; /* Sea Green / Emerald 600 */
+            --color-gold: #D4AF37; /* Goldenrod */
         }
 
-        [data-theme="dark"] {
-            --bg-light: #1A202C;
-            --bg-white: #2D3748;
-            --text-dark: #F7FAFC;
-            --text-light: #CBD5E0;
-            --border-light: #4A5568;
-            --shadow: 0 10px 25px rgba(0,0,0,0.3);
-            --shadow-lg: 0 20px 40px rgba(0,0,0,0.4);
-        }
-
-        * {
-            margin: 0;
-            padding: 0;
-            box-sizing: border-box;
-        }
-
+        /* Custom Fonts for Bangla and Arabic */
         body {
             font-family: 'Hind Siliguri', sans-serif;
-            background: linear-gradient(135deg, var(--bg-light) 0%, var(--bg-white) 100%);
-            color: var(--text-dark);
-            min-height: 100vh;
-            transition: all 0.3s ease;
-            line-height: 1.6;
+        }
+        .arabic-text {
+            font-family: 'Amiri', serif;
+            text-align: right;
+            direction: rtl;
+        }
+        .bangla-text {
+            font-family: 'Hind Siliguri', sans-serif;
+            text-align: justify;
         }
 
-        .container {
-            max-width: 1400px;
-            margin: 0 auto;
-            padding: 20px;
-        }
+        /* Recreating the theme variables using CSS custom properties for JS toggle */
+        [data-theme="dark"] .bg-base { background: #1A202C !important; }
+        [data-theme="dark"] .text-base { color: #F7FAFC !important; }
+        [data-theme="dark"] .bg-card { background: #2D3748 !important; }
+        [data-theme="dark"] .text-muted { color: #CBD5E0 !important; }
+        [data-theme="dark"] .border-light { border-color: #4A5568 !important; }
+        [data-theme="dark"] .bg-upload { background: linear-gradient(135deg, #1e3a1e 0%, #2d4a2d 100%) !important; }
+        [data-theme="dark"] .bg-warning { background: #443300 !important; color: #ffeb99 !important; }
+        [data-theme="dark"] .bg-success { background: #155724 !important; color: #d4edda !important; }
 
-        /* Header Styles */
-        .header {
-            background: linear-gradient(135deg, var(--primary) 0%, var(--primary-dark) 100%);
-            border-radius: var(--radius-lg);
-            padding: 40px;
-            margin-bottom: 30px;
-            position: relative;
-            overflow: hidden;
-            box-shadow: var(--shadow-lg);
+        /* Custom Styles for Effects and Overrides */
+        .header-bg {
+            background: linear-gradient(135deg, var(--color-primary) 0%, #1a5c3a 100%);
         }
-
-        .header::before {
-            content: '';
-            position: absolute;
-            top: 0;
-            left: 0;
-            right: 0;
-            bottom: 0;
-            background: url("data:image/svg+xml,%3Csvg width='100' height='100' viewBox='0 0 100 100' xmlns='http://www.w3.org/2000/svg'%3E%3Cpath d='M11 18c3.866 0 7-3.134 7-7s-3.134-7-7-7-7 3.134-7 7 3.134 7 7 7zm48 25c3.866 0 7-3.134 7-7s-3.134-7-7-7-7 3.134-7 7 3.134 7 7 7zm-43-7c1.657 0 3-1.343 3-3s-1.343-3-3-3-3 1.343-3 3 1.343 3 3 3zm63 31c1.657 0 3-1.343 3-3s-1.343-3-3-3-3 1.343-3 3 1.343 3 3 3zM34 90c1.657 0 3-1.343 3-3s-1.343-3-3-3-3 1.343-3 3 1.343 3 3 3zm56-76c1.657 0 3-1.343 3-3s-1.343-3-3-3-3 1.343-3 3 1.343 3 3 3zM12 86c2.21 0 4-1.79 4-4s-1.79-4-4-4-4 1.79-4 4 1.79 4 4 4zm28-65c2.21 0 4-1.79 4-4s-1.79-4-4-4-4 1.79-4 4 1.79 4 4 4zm23-11c2.76 0 5-2.24 5-5s-2.24-5-5-5-5 2.24-5 5 2.24 5 5 5zm-6 60c2.21 0 4-1.79 4-4s-1.79-4-4-4-4 1.79-4 4 1.79 4 4 4zm29 22c2.76 0 5-2.24 5-5s-2.24-5-5-5-5 2.24-5 5 2.24 5 5 5zM32 63c2.76 0 5-2.24 5-5s-2.24-5-5-5-5 2.24-5 5 2.24 5 5 5zm57-13c2.76 0 5-2.24 5-5s-2.24-5-5-5-5 2.24-5 5 2.24 5 5 5zm-9-21c1.105 0 2-.895 2-2s-.895-2-2-2-2 .895-2 2 .895 2 2 2zM60 91c1.105 0 2-.895 2-2s-.895-2-2-2-2 .895-2 2 .895 2 2 2zM35 41c1.105 0 2-.895 2-2s-.895-2-2-2-2 .895-2 2 .895 2 2 2zM12 60c1.105 0 2-.895 2-2s-.895-2-2-2-2 .895-2 2 .895 2 2 2z' fill='%23ffffff' fill-opacity='0.03' fill-rule='evenodd'/%3E%3C/svg%3E");
-            opacity: 0.1;
-        }
-
-        .logo-container {
-            text-align: center;
-            color: white;
-            position: relative;
-            z-index: 2;
-        }
-
-        .logo {
-            font-size: 4rem;
-            margin-bottom: 15px;
-            display: inline-block;
-            background: linear-gradient(135deg, var(--gold) 0%, var(--gold-dark) 100%);
+        .logo-gradient {
+            background: linear-gradient(135deg, var(--color-gold) 0%, #B8860B 100%);
             -webkit-background-clip: text;
             -webkit-text-fill-color: transparent;
             filter: drop-shadow(0 4px 8px rgba(0,0,0,0.3));
         }
-
-        .title {
-            font-size: 3rem;
-            font-weight: 700;
-            margin-bottom: 10px;
-            text-shadow: 2px 2px 4px rgba(0,0,0,0.3);
+        .btn-primary-gradient {
+            background: linear-gradient(135deg, var(--color-primary) 0%, #1a5c3a 100%);
         }
-
-        .subtitle {
-            font-size: 1.3rem;
-            opacity: 0.9;
-            font-weight: 300;
-            max-width: 600px;
-            margin: 0 auto;
+        .btn-gold-gradient {
+            background: linear-gradient(135deg, var(--color-gold) 0%, #B8860B 100%);
         }
-
-        /* Navigation */
-        .nav-tabs {
-            display: flex;
-            background: var(--bg-white);
-            border-radius: var(--radius);
-            padding: 10px;
-            margin-bottom: 30px;
-            box-shadow: var(--shadow);
-            border: 1px solid var(--border-light);
-        }
-
-        .nav-tab {
-            flex: 1;
-            text-align: center;
-            padding: 15px;
-            cursor: pointer;
-            border-radius: var(--radius);
-            transition: all 0.3s ease;
-            font-weight: 600;
-            color: var(--text-light);
-        }
-
-        .nav-tab.active {
-            background: var(--primary);
-            color: white;
-            box-shadow: var(--shadow);
-        }
-
-        .nav-tab:hover:not(.active) {
-            background: var(--bg-light);
-            color: var(--text-dark);
-        }
-
-        /* Main Card */
-        .main-card {
-            background: var(--bg-white);
-            border-radius: var(--radius-lg);
-            padding: 40px;
-            box-shadow: var(--shadow-lg);
-            margin-bottom: 30px;
-            border: 1px solid var(--border-light);
-        }
-
-        /* File Upload - Enhanced */
-        .file-upload-container {
-            border: 3px dashed var(--primary);
-            border-radius: var(--radius-lg);
-            padding: 60px 40px;
-            text-align: center;
-            margin: 30px 0;
-            background: linear-gradient(135deg, #f8fff9 0%, #f0fff0 100%);
-            transition: all 0.3s ease;
-            position: relative;
-            overflow: hidden;
-        }
-
-        [data-theme="dark"] .file-upload-container {
-            background: linear-gradient(135deg, #1e3a1e 0%, #2d4a2d 100%);
-        }
-
-        .file-upload-container:hover {
-            border-color: var(--primary-dark);
-            transform: translateY(-2px);
-            box-shadow: var(--shadow-lg);
-        }
-
-        .upload-icon {
-            font-size: 5rem;
-            color: var(--primary);
-            margin-bottom: 20px;
-            filter: drop-shadow(0 4px 8px rgba(46, 139, 87, 0.3));
-        }
-
-        /* Buttons - Enhanced */
-        .btn {
-            background: linear-gradient(135deg, var(--primary) 0%, var(--primary-dark) 100%);
-            color: white;
-            border: none;
-            padding: 18px 35px;
-            border-radius: 50px;
-            font-size: 1.1rem;
-            font-weight: 600;
-            cursor: pointer;
-            transition: all 0.3s ease;
-            display: inline-flex;
-            align-items: center;
-            gap: 12px;
-            margin: 8px;
-            box-shadow: var(--shadow);
-            position: relative;
-            overflow: hidden;
-        }
-
-        .btn::before {
-            content: '';
-            position: absolute;
-            top: 0;
-            left: -100%;
-            width: 100%;
-            height: 100%;
-            background: linear-gradient(90deg, transparent, rgba(255,255,255,0.2), transparent);
-            transition: left 0.5s;
-        }
-
-        .btn:hover::before {
-            left: 100%;
-        }
-
-        .btn:hover {
-            transform: translateY(-3px);
-            box-shadow: 0 12px 25px rgba(46, 139, 87, 0.4);
-        }
-
-        .btn-secondary {
-            background: linear-gradient(135deg, #6c757d 0%, #495057 100%);
-        }
-
-        .btn-danger {
+        .btn-danger-gradient {
             background: linear-gradient(135deg, #dc3545 0%, #c82333 100%);
         }
-
-        .btn-gold {
-            background: linear-gradient(135deg, var(--gold) 0%, var(--gold-dark) 100%);
+        .btn-secondary-gradient {
+            background: linear-gradient(135deg, #6c757d 0%, #495057 100%);
         }
-
-        .btn:disabled {
-            background: #ccc;
-            cursor: not-allowed;
-            transform: none;
-            box-shadow: none;
+        .progress-gradient {
+             background: linear-gradient(135deg, var(--color-primary) 0%, #1a5c3a 100%);
         }
-
-        .btn:disabled::before {
-            display: none;
-        }
-
-        /* Text Areas - Enhanced */
-        .text-preview-container {
-            display: grid;
-            grid-template-columns: 1fr 1fr;
-            gap: 30px;
-            margin: 40px 0;
-        }
-
-        @media (max-width: 1024px) {
-            .text-preview-container {
-                grid-template-columns: 1fr;
-            }
-        }
-
-        .text-preview {
-            border: 2px solid var(--border-light);
-            border-radius: var(--radius-lg);
-            padding: 25px;
-            background: var(--bg-white);
-            box-shadow: var(--shadow);
-            transition: all 0.3s ease;
-        }
-
-        .text-preview:hover {
-            box-shadow: var(--shadow-lg);
-            transform: translateY(-2px);
-        }
-
-        .text-preview-header {
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-            margin-bottom: 20px;
-            padding-bottom: 15px;
-            border-bottom: 2px solid var(--border-light);
-        }
-
-        .text-preview h3 {
-            color: var(--primary);
-            font-size: 1.4rem;
-            display: flex;
-            align-items: center;
-            gap: 12px;
-        }
-
-        .text-content {
-            width: 100%;
-            height: 300px;
-            border: 1px solid var(--border-light);
-            border-radius: var(--radius);
-            padding: 20px;
-            font-family: 'Hind Siliguri', sans-serif;
-            font-size: 16px;
-            line-height: 1.8;
-            resize: none;
-            background: var(--bg-light);
-            color: var(--text-dark);
-            overflow-y: auto;
-        }
-
-        .text-content:focus {
-            outline: none;
-            border-color: var(--primary);
-        }
-
-        /* Action Buttons */
-        .action-buttons {
-            display: flex;
-            justify-content: center;
-            gap: 15px;
-            margin: 30px 0;
-            flex-wrap: wrap;
-        }
-
-        /* Reader Modal */
-        .reader-modal {
-            display: none;
-            position: fixed;
-            top: 0;
-            left: 0;
-            width: 100%;
-            height: 100%;
-            background: rgba(0,0,0,0.8);
-            z-index: 1000;
-            backdrop-filter: blur(10px);
-        }
-
-        .reader-content {
-            position: absolute;
-            top: 50%;
-            left: 50%;
-            transform: translate(-50%, -50%);
-            width: 90%;
-            height: 85%;
-            background: var(--bg-white);
-            border-radius: var(--radius-lg);
-            box-shadow: var(--shadow-lg);
-            display: flex;
-            flex-direction: column;
-            overflow: hidden;
-        }
-
-        .reader-header {
-            padding: 20px;
-            background: var(--primary);
-            color: white;
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-            border-bottom: 1px solid var(--border-light);
-        }
-
-        .reader-body {
-            flex: 1;
-            padding: 30px;
-            overflow-y: auto;
-            line-height: 2;
-            font-size: 18px;
-        }
-
-        .reader-controls {
-            padding: 20px;
-            background: var(--bg-light);
-            border-top: 1px solid var(--border-light);
-            display: flex;
-            gap: 15px;
-            align-items: center;
-            justify-content: center;
-        }
-
-        /* History Section */
-        .history-section {
-            display: none;
-        }
-
-        .history-grid {
-            display: grid;
-            grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
-            gap: 20px;
-            margin-top: 30px;
-        }
-
-        .history-card {
-            background: var(--bg-white);
-            border-radius: var(--radius);
-            padding: 25px;
-            box-shadow: var(--shadow);
-            border: 1px solid var(--border-light);
-            transition: all 0.3s ease;
-            cursor: pointer;
-        }
-
-        .history-card:hover {
-            transform: translateY(-5px);
-            box-shadow: var(--shadow-lg);
-        }
-
-        .history-card-header {
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-            margin-bottom: 15px;
-        }
-
-        .history-title {
-            font-weight: 600;
-            color: var(--text-dark);
-            font-size: 1.1rem;
-        }
-
-        .history-date {
-            color: var(--text-light);
-            font-size: 0.9rem;
-        }
-
-        .history-preview {
-            color: var(--text-light);
-            font-size: 0.95rem;
-            line-height: 1.5;
-            display: -webkit-box;
-            -webkit-line-clamp: 3;
-            -webkit-box-orient: vertical;
-            overflow: hidden;
-        }
-
-        /* Progress Bar - Enhanced */
-        .progress-container {
-            width: 100%;
-            background: var(--bg-light);
-            border-radius: 50px;
-            margin: 25px 0;
-            overflow: hidden;
-            box-shadow: inset 0 2px 4px rgba(0,0,0,0.1);
-        }
-
-        .progress-bar {
-            height: 25px;
-            background: linear-gradient(135deg, var(--primary) 0%, var(--primary-dark) 100%);
-            border-radius: 50px;
-            transition: width 0.4s ease;
-            text-align: center;
-            color: white;
-            font-size: 14px;
-            font-weight: 600;
-            line-height: 25px;
-            position: relative;
-            overflow: hidden;
-        }
-
         .progress-bar::after {
             content: '';
             position: absolute;
@@ -464,7 +79,7 @@
             left: -100%;
             width: 100%;
             height: 100%;
-            background: linear-gradient(90deg, transparent, rgba(255,255,255,0.3), transparent);
+            background: linear-gradient(90deg, transparent, rgba(255,255,255,0.2), transparent);
             animation: shimmer 2s infinite;
         }
 
@@ -473,402 +88,257 @@
             100% { left: 100%; }
         }
 
-        /* Loading Animation - Enhanced */
-        .loading {
-            display: none;
-            text-align: center;
-            padding: 40px;
-        }
-
-        .spinner {
-            width: 60px;
-            height: 60px;
-            border: 4px solid var(--border-light);
-            border-top: 4px solid var(--primary);
-            border-radius: 50%;
-            animation: spin 1s linear infinite;
-            margin: 0 auto 20px;
-        }
-
-        @keyframes spin {
-            0% { transform: rotate(0deg); }
-            100% { transform: rotate(360deg); }
-        }
-
-        /* Theme Toggle */
-        .theme-toggle {
-            position: absolute;
-            top: 20px;
-            right: 20px;
-            z-index: 3;
-        }
-
-        /* Dark/Light Toggle Switch */
-        .switch {
-            position: relative;
-            display: inline-block;
-            width: 60px;
-            height: 34px;
-        }
-
-        .switch input {
-            opacity: 0;
-            width: 0;
-            height: 0;
-        }
-
-        .slider {
-            position: absolute;
-            cursor: pointer;
-            top: 0;
-            left: 0;
-            right: 0;
-            bottom: 0;
-            background-color: #2196F3;
-            transition: 0.4s;
-            border-radius: 34px;
-        }
-
-        .slider:before {
-            position: absolute;
-            content: "";
-            height: 26px;
-            width: 26px;
-            left: 4px;
-            bottom: 4px;
-            background-color: white;
-            transition: 0.4s;
-            border-radius: 50%;
-        }
-
-        input:checked + .slider {
-            background-color: #ff9800;
-        }
-
-        input:checked + .slider:before {
-            transform: translateX(26px);
-        }
-
-        /* Footer */
-        .footer {
-            text-align: center;
-            padding: 40px 0;
-            color: var(--text-light);
-            border-top: 1px solid var(--border-light);
-            margin-top: 50px;
-        }
-
-        /* Responsive */
-        @media (max-width: 768px) {
-            .title {
-                font-size: 2.2rem;
-            }
-            .subtitle {
-                font-size: 1.1rem;
-            }
-            .nav-tabs {
-                flex-direction: column;
-                gap: 10px;
-            }
-            .action-buttons {
-                flex-direction: column;
-                align-items: center;
-            }
-            .btn {
-                width: 100%;
-                justify-content: center;
-            }
-            .reader-content {
-                width: 95%;
-                height: 90%;
-            }
-        }
-
-        /* Utility Classes */
-        .text-center { text-align: center; }
-        .mb-20 { margin-bottom: 20px; }
-        .mb-30 { margin-bottom: 30px; }
-        .hidden { display: none; }
-
-        /* Arabic Text Style */
-        .arabic-text {
-            font-family: 'Amiri', serif;
-            font-size: 20px;
-            line-height: 2.5;
-            text-align: right;
-            direction: rtl;
-        }
-
-        /* Bangla Text Style */
-        .bangla-text {
-            font-family: 'Hind Siliguri', sans-serif;
-            font-size: 18px;
-            line-height: 1.8;
-            text-align: justify;
-        }
-
-        /* File Info */
-        .file-info {
-            background: var(--bg-light);
-            padding: 15px;
-            border-radius: var(--radius);
-            margin: 15px 0;
-            border-left: 4px solid var(--primary);
-        }
-
-        .file-name {
-            font-weight: 600;
-            color: var(--primary);
-        }
-
-        .file-size {
-            color: var(--text-light);
-            font-size: 0.9rem;
-        }
-
-        /* TTS Controls */
         .tts-active {
-            background: #dc3545 !important;
+            animation: pulse 1s infinite;
         }
-
-        .tts-active:hover {
-            background: #c82333 !important;
-        }
-
-        /* API Status */
-        .api-status {
-            padding: 10px 15px;
-            border-radius: var(--radius);
-            margin: 10px 0;
-            text-align: center;
-            font-weight: 600;
-        }
-
-        .api-status.success {
-            background: #d4edda;
-            color: #155724;
-            border-left: 4px solid #28a745;
-        }
-
-        .api-status.error {
-            background: #f8d7da;
-            color: #721c24;
-            border-left: 4px solid #dc3545;
-        }
-
-        .api-status.warning {
-            background: #fff3cd;
-            color: #856404;
-            border-left: 4px solid #ffc107;
-        }
-
-        /* Stop Button Animation */
-        .stop-pulse {
-            animation: pulse 2s infinite;
-        }
-
         @keyframes pulse {
-            0% { transform: scale(1); }
-            50% { transform: scale(1.05); }
-            100% { transform: scale(1); }
+            0% { transform: scale(1); box-shadow: 0 0 0 0 rgba(220, 53, 69, 0.7); }
+            70% { transform: scale(1.05); box-shadow: 0 0 0 10px rgba(220, 53, 69, 0); }
+            100% { transform: scale(1); box-shadow: 0 0 0 0 rgba(220, 53, 69, 0); }
+        }
+
+        .notification {
+            z-index: 2000;
         }
     </style>
+
+    <script>
+        // Set the path for PDF.js worker
+        pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.4.120/pdf.worker.min.js';
+    </script>
 </head>
-<body>
-    <div class="container">
+<body class="bg-gray-50 text-gray-800 min-h-screen transition-all duration-300 bg-base">
+    <!-- Notification Container -->
+    <div id="notificationContainer" class="fixed top-5 right-5 space-y-2 notification"></div>
+
+    <div class="container mx-auto p-5 max-w-7xl">
         <!-- Header -->
-        <header class="header">
-            <div class="theme-toggle">
-                <label class="switch">
-                    <input type="checkbox" id="themeToggle">
-                    <span class="slider"></span>
+        <header class="header-bg rounded-3xl p-10 mb-8 relative overflow-hidden shadow-2xl">
+            <!-- Theme Toggle -->
+            <div class="absolute top-5 right-5 z-10">
+                <label class="switch relative inline-block w-16 h-8">
+                    <input type="checkbox" id="themeToggle" class="opacity-0 w-0 h-0">
+                    <span class="slider absolute cursor-pointer top-0 left-0 right-0 bottom-0 bg-blue-500 transition-all duration-300 rounded-full before:absolute before:content-[''] before:h-6 before:w-6 before:left-1 before:bottom-1 before:bg-white before:transition-all before:duration-300 before:rounded-full"></span>
                 </label>
             </div>
-            <div class="logo-container">
-                <div class="logo">لَا إِلٰهَ إِلَّا الله</div>
-                <h1 class="title">Al Bayan</h1>
-                <p class="subtitle">আরবি ইসলামিক বই অনুবাদ</p>
+            <script>
+                // Switch styling implementation in JS for simplicity
+                const themeToggle = document.getElementById('themeToggle');
+                themeToggle.addEventListener('change', function() {
+                    const slider = this.nextElementSibling;
+                    if (this.checked) {
+                        slider.style.backgroundColor = '#ff9800'; /* Amber/Orange */
+                        slider.style.boxShadow = '0 0 1px #ff9800';
+                        slider.querySelector(':before').style.transform = 'translateX(28px)';
+                    } else {
+                        slider.style.backgroundColor = '#2196F3'; /* Blue */
+                        slider.style.boxShadow = '0 0 1px #2196F3';
+                        slider.querySelector(':before').style.transform = 'translateX(0)';
+                    }
+                });
+            </script>
+            
+            <div class="text-center text-white relative z-10">
+                <div class="logo text-6xl mb-4 inline-block logo-gradient font-amiri">لَا إِلٰهَ إِلَّا الله</div>
+                <h1 class="text-4xl sm:text-5xl font-extrabold mb-2 text-shadow-md">Al Bayan</h1>
+                <p class="text-lg sm:text-xl font-light opacity-90 max-w-xl mx-auto">আরবি ইসলামিক বই অনুবাদ</p>
             </div>
         </header>
 
         <!-- Navigation Tabs -->
-        <div class="nav-tabs">
-            <div class="nav-tab active" onclick="showTab('translate')">
-                <i class="fas fa-translate"></i> অনুবাদ করুন
+        <div class="flex flex-col sm:flex-row bg-white bg-card rounded-xl p-3 mb-8 shadow-xl border border-gray-200 border-light">
+            <div class="nav-tab flex-1 text-center p-4 cursor-pointer rounded-xl transition-all duration-300 font-semibold text-gray-600 text-muted active bg-emerald-600 text-white shadow-md hover:bg-emerald-700"
+                 onclick="showTab('translate', this)">
+                <i class="fas fa-translate mr-2"></i> অনুবাদ করুন
             </div>
-            <div class="nav-tab" onclick="showTab('history')">
-                <i class="fas fa-history"></i> ইতিহাস
+            <div class="nav-tab flex-1 text-center p-4 cursor-pointer rounded-xl transition-all duration-300 font-semibold text-gray-600 text-muted hover:bg-gray-100 hover:text-gray-800"
+                 onclick="showTab('history', this)">
+                <i class="fas fa-history mr-2"></i> ইতিহাস
             </div>
-            <div class="nav-tab" onclick="showTab('library')">
-                <i class="fas fa-book"></i> লাইব্রেরি
+            <div class="nav-tab flex-1 text-center p-4 cursor-pointer rounded-xl transition-all duration-300 font-semibold text-gray-600 text-muted hover:bg-gray-100 hover:text-gray-800"
+                 onclick="showTab('library', this)">
+                <i class="fas fa-book mr-2"></i> লাইব্রেরি
             </div>
         </div>
 
         <!-- Translation Tab -->
-        <div id="translate-tab" class="main-card">
+        <div id="translate-tab" class="main-card bg-white bg-card rounded-3xl p-6 md:p-10 shadow-2xl mb-8 border border-gray-200 border-light">
             <!-- API Status -->
-            <div id="apiStatus" class="api-status warning">
-                <i class="fas fa-exclamation-triangle"></i> জিমিনি API টি প্রয়োজন। নিচে আপনার API টি দিন।
+            <div id="apiStatus" class="api-status p-3 rounded-xl mb-5 text-center font-semibold bg-yellow-100 text-yellow-800 border-l-4 border-yellow-500 bg-warning">
+                <i class="fas fa-exclamation-triangle mr-2"></i> জিমিনি API টি প্রয়োজন। নিচে আপনার API টি দিন।
             </div>
 
             <!-- API Key Input -->
-            <div style="background: var(--bg-light); padding: 20px; border-radius: var(--radius); margin: 20px 0; border-left: 4px solid var(--primary);">
-                <div style="display: flex; gap: 10px; align-items: center; flex-wrap: wrap;">
-                    <input type="password" id="apiKeyInput" placeholder="এখানে আপনার জিমিনি API কী দিন" 
-                           style="flex: 1; padding: 12px 15px; border: 1px solid var(--border-light); border-radius: var(--radius); font-family: 'Hind Siliguri'; min-width: 250px;">
-                    <button class="btn" onclick="saveApiKey()" style="padding: 12px 20px;">
-                        <i class="fas fa-save"></i> সংরক্ষণ করুন
+            <div class="bg-gray-100 bg-base p-5 rounded-xl mb-8 border-l-4 border-emerald-600">
+                <div class="flex flex-col lg:flex-row gap-4 items-center flex-wrap">
+                    <input type="password" id="apiKeyInput" placeholder="এখানে আপনার জিমিনি API কী দিন"
+                           class="flex-1 p-3 border border-gray-300 rounded-lg font-hind-siliguri min-w-full lg:min-w-0 bg-white bg-card text-base focus:ring-emerald-500 focus:border-emerald-500">
+                    <button class="btn btn-primary-gradient text-white px-5 py-3 rounded-full font-semibold shadow-md hover:shadow-lg transition duration-300 flex items-center justify-center w-full lg:w-auto"
+                            onclick="saveApiKey()">
+                        <i class="fas fa-save mr-2"></i> সংরক্ষণ করুন
                     </button>
-                    <button class="btn btn-secondary" onclick="testApiKey()" style="padding: 12px 20px;">
-                        <i class="fas fa-test"></i> টেস্ট করুন
+                    <button class="btn btn-secondary-gradient text-white px-5 py-3 rounded-full font-semibold shadow-md hover:shadow-lg transition duration-300 flex items-center justify-center w-full lg:w-auto"
+                            onclick="testApiKey()">
+                        <i class="fas fa-microchip mr-2"></i> টেস্ট করুন
                     </button>
                 </div>
-                <p style="margin-top: 10px; font-size: 0.9rem; color: var(--text-light);">
-                    🔑 API কী পাবেন: <a href="https://aistudio.google.com/app/apikey" target="_blank" style="color: var(--primary);">Google AI Studio</a> থেকে
+                <p class="mt-3 text-sm text-gray-500 text-muted">
+                    🔑 API কী পাবেন: <a href="https://aistudio.google.com/app/apikey" target="_blank" class="text-emerald-600 hover:text-emerald-800 font-medium">Google AI Studio</a> থেকে
                 </p>
             </div>
 
             <!-- File Upload -->
-            <div class="file-upload-container" id="fileUploadArea">
-                <div class="upload-icon">
+            <div class="file-upload-container border-4 border-dashed border-emerald-600 rounded-3xl p-10 text-center my-8 bg-upload hover:border-emerald-800 transition duration-300 relative overflow-hidden" id="fileUploadArea">
+                <div class="upload-icon text-6xl text-emerald-600 mb-5 drop-shadow-lg">
                     <i class="fas fa-file-pdf"></i>
                 </div>
-                <h3 style="font-size: 2rem; margin-bottom: 15px; color: var(--text-dark);">PDF ফাইল আপলোড করুন</h3>
-                <p style="font-size: 1.2rem; color: var(--text-light); margin-bottom: 30px;">আরবি ইসলামিক বইয়ের PDF সিলেক্ট করুন (সর্বোচ্চ ২০ এমবি)</p>
+                <h3 class="text-3xl font-bold mb-3 text-gray-800 text-base">PDF ফাইল আপলোড করুন</h3>
+                <p class="text-lg text-gray-500 text-muted mb-6">আরবি ইসলামিক বইয়ের PDF সিলেক্ট করুন (সর্বোচ্চ ২০ এমবি)</p>
                 <input type="file" id="pdfFile" accept=".pdf" hidden>
-                <button class="btn btn-gold" onclick="document.getElementById('pdfFile').click()">
-                    <i class="fas fa-upload"></i> PDF সিলেক্ট করুন
+                <button class="btn btn-gold-gradient text-white px-8 py-4 rounded-full font-bold shadow-xl hover:shadow-2xl transition duration-300"
+                        onclick="document.getElementById('pdfFile').click()">
+                    <i class="fas fa-upload mr-3"></i> PDF সিলেক্ট করুন
                 </button>
             </div>
 
             <!-- File Info Display -->
-            <div id="fileInfo" class="file-info" style="display: none;">
-                <div class="file-name" id="fileName"></div>
-                <div class="file-size" id="fileSize"></div>
+            <div id="fileInfo" class="bg-gray-100 bg-base p-4 rounded-xl my-4 border-l-4 border-emerald-600 hidden">
+                <div class="file-name font-semibold text-emerald-600" id="fileName"></div>
+                <div class="file-size text-gray-500 text-sm text-muted" id="fileSize"></div>
             </div>
 
             <!-- PDF Type Selection -->
-            <div style="background: #fff3cd; padding: 20px; border-radius: var(--radius); margin: 20px 0; text-align: center; border-left: 4px solid #ffc107;">
-                <strong>📄 PDF টাইপ সিলেক্ট করুন:</strong>
-                <div style="display: flex; justify-content: center; gap: 20px; margin-top: 15px; flex-wrap: wrap;">
-                    <div class="pdf-type-option active" data-type="text" onclick="selectPdfType('text')" style="display: flex; align-items: center; gap: 8px; padding: 10px 15px; background: white; border-radius: 8px; cursor: pointer; transition: all 0.3s ease;">
-                        <i class="fas fa-font"></i>
-                        <span>সাধারণ PDF (টেক্সট)</span>
+            <div class="bg-yellow-50 bg-warning p-5 rounded-xl my-5 text-center border-l-4 border-yellow-400">
+                <strong class="text-gray-800 text-base">📄 PDF টাইপ সিলেক্ট করুন:</strong>
+                <div class="flex justify-center gap-5 mt-4 flex-wrap">
+                    <div class="pdf-type-option active flex items-center gap-2 p-3 bg-white rounded-lg cursor-pointer transition-all duration-300 shadow-md ring-2 ring-emerald-500"
+                         data-type="text" onclick="selectPdfType('text', this)">
+                        <i class="fas fa-font text-emerald-600"></i>
+                        <span class="text-gray-700">সাধারণ PDF (টেক্সট)</span>
                     </div>
-                    <div class="pdf-type-option" data-type="ocr" onclick="selectPdfType('ocr')" style="display: flex; align-items: center; gap: 8px; padding: 10px 15px; background: white; border-radius: 8px; cursor: pointer; transition: all 0.3s ease;">
-                        <i class="fas fa-camera"></i>
-                        <span>স্ক্যান করা PDF (OCR)</span>
+                    <div class="pdf-type-option flex items-center gap-2 p-3 bg-white rounded-lg cursor-pointer transition-all duration-300 shadow-md hover:ring-2 hover:ring-emerald-500"
+                         data-type="ocr" onclick="selectPdfType('ocr', this)">
+                        <i class="fas fa-camera text-gray-500"></i>
+                        <span class="text-gray-700">স্ক্যান করা PDF (OCR)</span>
                     </div>
                 </div>
             </div>
 
             <!-- Action Buttons -->
-            <div class="action-buttons">
-                <button class="btn" onclick="extractAndTranslate()" id="extractTranslateBtn">
-                    <i class="fas fa-bolt"></i> একসাথে এক্সট্র্যাক্ট ও অনুবাদ করুন
+            <div class="flex justify-center gap-4 my-8 flex-wrap">
+                <button class="btn btn-primary-gradient text-white px-8 py-4 rounded-full font-bold shadow-xl hover:shadow-2xl transition duration-300 flex items-center justify-center"
+                        onclick="extractAndTranslate()" id="extractTranslateBtn">
+                    <i class="fas fa-bolt mr-3"></i> একসাথে এক্সট্র্যাক্ট ও অনুবাদ করুন
                 </button>
-                <button class="btn btn-danger stop-pulse" onclick="stopTranslation()" id="stopBtn" style="display: none;">
-                    <i class="fas fa-stop"></i> অনুবাদ বন্ধ করুন
+                <button class="btn btn-danger-gradient text-white px-8 py-4 rounded-full font-bold shadow-xl hover:shadow-2xl transition duration-300 hidden items-center justify-center"
+                        onclick="stopTranslation()" id="stopBtn">
+                    <i class="fas fa-stop mr-3"></i> অনুবাদ বন্ধ করুন
                 </button>
-                <button class="btn btn-secondary" onclick="clearAll()">
-                    <i class="fas fa-redo"></i> রিসেট করুন
+                <button class="btn btn-secondary-gradient text-white px-8 py-4 rounded-full font-bold shadow-xl hover:shadow-2xl transition duration-300 flex items-center justify-center"
+                        onclick="clearAll()">
+                    <i class="fas fa-redo mr-3"></i> রিসেট করুন
                 </button>
             </div>
 
             <!-- Progress Bar -->
-            <div class="progress-container" id="progressContainer" style="display: none;">
-                <div class="progress-bar" id="progressBar" style="width: 0%">0%</div>
+            <div class="w-full bg-gray-200 rounded-full my-6 overflow-hidden shadow-inner hidden" id="progressContainer">
+                <div class="progress-bar progress-gradient h-6 rounded-full text-center text-white text-sm font-semibold relative"
+                     id="progressBar" style="width: 0%">0%</div>
             </div>
 
             <!-- Loading -->
-            <div class="loading" id="loading">
-                <div class="spinner"></div>
-                <p id="loadingText" style="font-size: 1.2rem; color: var(--text-light);">অনুবাদ করা হচ্ছে... অনুগ্রহ করে অপেক্ষা করুন</p>
+            <div class="hidden text-center p-10" id="loading">
+                <div class="spinner w-16 h-16 border-4 border-gray-300 border-t-emerald-600 rounded-full animate-spin mx-auto mb-4"></div>
+                <p id="loadingText" class="text-lg text-gray-500">অনুবাদ করা হচ্ছে... অনুগ্রহ করে অপেক্ষা করুন</p>
             </div>
 
             <!-- Text Preview -->
-            <div class="text-preview-container">
-                <div class="text-preview">
-                    <div class="text-preview-header">
-                        <h3><i class="fas fa-language"></i> আরবি টেক্সট</h3>
-                        <button class="btn" onclick="openReader('arabic')" style="padding: 8px 15px; font-size: 0.9rem;">
-                            <i class="fas fa-expand"></i> বড় করে পড়ুন
+            <div class="grid grid-cols-1 lg:grid-cols-2 gap-8 my-10">
+                <!-- Arabic Text Preview -->
+                <div class="bg-white bg-card rounded-3xl p-6 shadow-xl border border-gray-200 border-light transition duration-300 hover:shadow-2xl">
+                    <div class="flex justify-between items-center mb-5 pb-4 border-b-2 border-gray-100 border-light">
+                        <h3 class="text-xl font-semibold text-emerald-600 flex items-center gap-3"><i class="fas fa-language"></i> আরবি টেক্সট</h3>
+                        <button class="btn btn-primary-gradient text-white px-4 py-2 rounded-full text-sm font-medium" onclick="openReader('arabic')">
+                            <i class="fas fa-expand mr-2"></i> বড় করে পড়ুন
                         </button>
                     </div>
-                    <textarea class="text-content arabic-text" id="arabicText" placeholder="এখানে আরবি টেক্সট দেখানো হবে..." readonly></textarea>
+                    <textarea class="text-content arabic-text w-full h-80 border border-gray-300 rounded-xl p-4 text-lg bg-gray-50 bg-base text-base resize-none focus:ring-emerald-500 focus:border-emerald-500 outline-none transition duration-200"
+                              id="arabicText" placeholder="এখানে আরবি টেক্সট দেখানো হবে..." readonly></textarea>
                 </div>
-                <div class="text-preview">
-                    <div class="text-preview-header">
-                        <h3><i class="fas fa-translate"></i> বাংলা অনুবাদ</h3>
-                        <button class="btn" onclick="openReader('bangla')" style="padding: 8px 15px; font-size: 0.9rem;">
-                            <i class="fas fa-expand"></i> বড় করে পড়ুন
+                <!-- Bangla Translation Preview -->
+                <div class="bg-white bg-card rounded-3xl p-6 shadow-xl border border-gray-200 border-light transition duration-300 hover:shadow-2xl">
+                    <div class="flex justify-between items-center mb-5 pb-4 border-b-2 border-gray-100 border-light">
+                        <h3 class="text-xl font-semibold text-emerald-600 flex items-center gap-3"><i class="fas fa-translate"></i> বাংলা অনুবাদ</h3>
+                        <button class="btn btn-primary-gradient text-white px-4 py-2 rounded-full text-sm font-medium" onclick="openReader('bangla')">
+                            <i class="fas fa-expand mr-2"></i> বড় করে পড়ুন
                         </button>
                     </div>
-                    <textarea class="text-content bangla-text" id="banglaText" placeholder="এখানে বাংলা অনুবাদ দেখানো হবে..." readonly></textarea>
+                    <textarea class="text-content bangla-text w-full h-80 border border-gray-300 rounded-xl p-4 text-base bg-gray-50 bg-base text-base resize-none focus:ring-emerald-500 focus:border-emerald-500 outline-none transition duration-200"
+                              id="banglaText" placeholder="এখানে বাংলা অনুবাদ দেখানো হবে..." readonly></textarea>
                 </div>
             </div>
         </div>
 
         <!-- History Tab -->
-        <div id="history-tab" class="main-card hidden">
-            <h2 style="text-align: center; margin-bottom: 30px; color: var(--primary);">
-                <i class="fas fa-history"></i> আপনার অনুবাদ ইতিহাস
+        <div id="history-tab" class="main-card bg-white bg-card rounded-3xl p-6 md:p-10 shadow-2xl mb-8 border border-gray-200 border-light hidden">
+            <h2 class="text-center text-2xl md:text-3xl font-bold mb-8 text-emerald-600">
+                <i class="fas fa-history mr-2"></i> আপনার অনুবাদ ইতিহাস
             </h2>
-            <div class="history-grid" id="historyGrid">
-                <!-- History items will be dynamically added here -->
-                <div style="text-align: center; color: var(--text-light); padding: 40px;">
-                    <i class="fas fa-inbox" style="font-size: 3rem; margin-bottom: 20px;"></i>
-                    <p>কোনো অনুবাদ ইতিহাস নেই</p>
+            <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-5 mt-6" id="historyGrid">
+                <div class="text-center text-gray-500 p-10 col-span-full">
+                    <i class="fas fa-inbox text-5xl mb-4 text-gray-300"></i>
+                    <p class="text-lg">কোনো অনুবাদ ইতিহাস নেই</p>
                 </div>
             </div>
         </div>
 
         <!-- Library Tab -->
-        <div id="library-tab" class="main-card hidden">
-            <h2 style="text-align: center; margin-bottom: 30px; color: var(--primary);">
-                <i class="fas fa-book"></i> ইসলামিক লাইব্রেরি
+        <div id="library-tab" class="main-card bg-white bg-card rounded-3xl p-6 md:p-10 shadow-2xl mb-8 border border-gray-200 border-light hidden">
+            <h2 class="text-center text-2xl md:text-3xl font-bold mb-8 text-emerald-600">
+                <i class="fas fa-book mr-2"></i> ইসলামিক লাইব্রেরি
             </h2>
-            <div style="text-align: center; color: var(--text-light); margin-bottom: 40px;">
-                <p>শীঘ্রই আসছে... প্রিসেট ইসলামিক বইগুলোর সংগ্রহ</p>
+            <div class="text-center text-gray-500 p-10 bg-gray-50 bg-base rounded-xl">
+                <i class="fas fa-hourglass-half text-5xl mb-4 text-emerald-300"></i>
+                <p class="text-xl">শীঘ্রই আসছে... প্রিসেট ইসলামিক বইগুলোর সংগ্রহ</p>
             </div>
         </div>
     </div>
 
     <!-- Reader Modal -->
-    <div class="reader-modal" id="readerModal">
-        <div class="reader-content">
-            <div class="reader-header">
-                <h3 id="readerTitle">বাংলা অনুবাদ</h3>
-                <button class="btn" onclick="closeReader()" style="padding: 8px 15px; background: rgba(255,255,255,0.2);">
-                    <i class="fas fa-times"></i> বন্ধ করুন
+    <div class="reader-modal hidden fixed inset-0 bg-black bg-opacity-80 backdrop-blur-lg z-50 flex items-center justify-center transition-opacity duration-300" id="readerModal">
+        <div class="reader-content relative w-11/12 h-5/6 bg-white bg-card rounded-3xl shadow-2xl flex flex-col overflow-hidden">
+            <div class="reader-header flex justify-between items-center p-5 bg-emerald-600 text-white">
+                <h3 id="readerTitle" class="text-2xl font-bold">বাংলা অনুবাদ</h3>
+                <button class="btn px-4 py-2 rounded-full bg-white bg-opacity-20 hover:bg-opacity-30 transition duration-200 text-sm font-medium" onclick="closeReader()">
+                    <i class="fas fa-times mr-2"></i> বন্ধ করুন
                 </button>
             </div>
-            <div class="reader-body" id="readerBody">
-                <!-- Content will be dynamically added -->
+            <div class="reader-body flex-1 p-8 overflow-y-auto text-lg text-base" id="readerBody">
+                <div class="reader-content-text bangla-text text-xl leading-relaxed"></div>
             </div>
-            <div class="reader-controls">
-                <button class="btn" onclick="changeFontSize(-2)" style="padding: 8px 15px;">
-                    <i class="fas fa-font"></i> ছোট
+            <div class="reader-controls p-5 bg-gray-100 bg-base border-t border-gray-200 border-light flex gap-4 items-center justify-center flex-wrap">
+                <button class="btn btn-primary-gradient px-4 py-2 rounded-full text-sm font-medium" onclick="changeFontSize(-2)">
+                    <i class="fas fa-font mr-2"></i> ছোট
                 </button>
-                <button class="btn" onclick="changeFontSize(2)" style="padding: 8px 15px;">
-                    <i class="fas fa-font"></i> বড়
+                <button class="btn btn-primary-gradient px-4 py-2 rounded-full text-sm font-medium" onclick="changeFontSize(2)">
+                    <i class="fas fa-font mr-2"></i> বড়
                 </button>
-                <button class="btn" onclick="toggleDarkReader()" style="padding: 8px 15px;">
-                    <i class="fas fa-moon"></i> নাইট মোড
+                <button class="btn btn-secondary-gradient px-4 py-2 rounded-full text-sm font-medium" onclick="toggleDarkReader()">
+                    <i class="fas fa-moon mr-2"></i> নাইট মোড
                 </button>
-                <button class="btn" id="ttsButton" onclick="toggleSpeakText()" style="padding: 8px 15px;">
-                    <i class="fas fa-volume-up"></i> পড়ুন
+                <button class="btn btn-danger-gradient px-4 py-2 rounded-full text-sm font-medium transition duration-300" id="ttsButton" onclick="toggleSpeakText()">
+                    <i class="fas fa-volume-up mr-2"></i> পড়ুন
                 </button>
             </div>
         </div>
     </div>
 
     <!-- Footer -->
-    <footer class="footer">
-        <p>© 2025 Al-Bayan - translation is not accurate, read carefully.</p>
-        <p style="margin-top: 10px; font-size: 0.9em;">
-            
-            বাকিয়াহ ইনস্টিটিউট দ্বারা পরিচালিত
+    <footer class="text-center p-8 text-gray-500 border-t border-gray-200 border-light mt-10 text-muted">
+        <p class="text-sm">© 2025 Al-Bayan - Translation is powered by Google Gemini and should be read carefully.
+        </p>
+        <p class="mt-2 text-xs">
+            বাকিয়াহ ইনস্টিটিউট দ্বারা পরিচালিত
         </p>
     </footer>
 
@@ -886,6 +356,55 @@
 
         // Gemini API Configuration
         const GEMINI_API_URL = "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent";
+        
+        // --- Custom Notification System (Replaces alert()) ---
+
+        function showNotification(message, type = 'success') {
+            const container = document.getElementById('notificationContainer');
+            const id = Date.now();
+            const colorMap = {
+                success: 'bg-emerald-100 border-l-4 border-emerald-500 text-emerald-700',
+                warning: 'bg-yellow-100 border-l-4 border-yellow-500 text-yellow-700',
+                error: 'bg-red-100 border-l-4 border-red-500 text-red-700',
+                info: 'bg-blue-100 border-l-4 border-blue-500 text-blue-700'
+            };
+            const iconMap = {
+                success: 'fas fa-check-circle',
+                warning: 'fas fa-exclamation-triangle',
+                error: 'fas fa-times-circle',
+                info: 'fas fa-info-circle'
+            };
+
+            const notification = document.createElement('div');
+            notification.id = `notif-${id}`;
+            notification.className = `p-4 rounded-lg shadow-lg max-w-sm w-full opacity-0 transition-opacity duration-500 ${colorMap[type]}`;
+            notification.innerHTML = `
+                <div class="flex items-start">
+                    <i class="${iconMap[type]} mt-1 mr-3 text-lg"></i>
+                    <p class="text-sm font-medium flex-1">${message}</p>
+                    <button class="ml-auto -mt-1 text-lg opacity-75 hover:opacity-100" onclick="document.getElementById('notif-${id}').remove()">
+                        &times;
+                    </button>
+                </div>
+            `;
+            
+            container.appendChild(notification);
+            
+            // Fade in
+            setTimeout(() => notification.style.opacity = '1', 10);
+
+            // Fade out and remove after 5 seconds
+            setTimeout(() => {
+                notification.style.opacity = '0';
+                setTimeout(() => notification.remove(), 500);
+            }, 5000);
+        }
+
+        const showSuccess = (msg) => showNotification(`✅ ${msg}`, 'success');
+        const showWarning = (msg) => showNotification(`⚠️ ${msg}`, 'warning');
+        const showError = (msg) => showNotification(`❌ ${msg}`, 'error');
+        
+        // --- End Custom Notification System ---
 
         // Initialize the application
         document.addEventListener('DOMContentLoaded', function() {
@@ -908,13 +427,11 @@
         // Save API Key
         function saveApiKey() {
             const apiKey = document.getElementById('apiKeyInput').value.trim();
-            if (!apiKey) {
-                alert('দয়া করে একটি বৈধ API দিন।');
-                return;
-            }
-
-            // If input is masked, don't save the mask
-            if (apiKey === '••••••••••••••••') {
+            
+            if (!apiKey || apiKey === '••••••••••••••••') {
+                if (!GEMINI_API_KEY) {
+                    showWarning('দয়া করে একটি বৈধ API কী দিন।');
+                }
                 return;
             }
 
@@ -926,40 +443,59 @@
 
         // Test API Key
         async function testApiKey() {
-            const apiKey = document.getElementById('apiKeyInput').value.trim();
-            
+            const apiKeyInput = document.getElementById('apiKeyInput');
+            const apiKey = apiKeyInput.value.trim();
+            const originalKey = GEMINI_API_KEY;
+
             if (!apiKey || apiKey === '••••••••••••••••') {
-                if (!GEMINI_API_KEY) {
-                    alert('দয়া করে প্রথমে একটি API 
-                          দিন।');
+                if (!originalKey) {
+                    showWarning('দয়া করে প্রথমে একটি API কী দিন।');
                     return;
                 }
-                // Use existing key
             } else {
                 GEMINI_API_KEY = apiKey;
-                localStorage.setItem('gemini_api_key', apiKey);
+                // Temporarily save for the test
             }
 
             showLoading('API কী টেস্ট করা হচ্ছে...');
 
             try {
-                const testResult = await translateWithGemini('سلام', true);
+                // Using a small, known Arabic phrase for a quick test
+                const testResult = await translateWithGemini('سلام عليكم', true);
                 if (testResult.includes('API_ERROR')) {
-                    throw new Error('API কীটি বৈধ নয়');
+                    throw new Error('API কীটি বৈধ নয় অথবা রেট সীমিত।');
                 }
                 updateApiStatus('success', '✅ API টি সঠিক! আপনি এখন অনুবাদ করতে পারেন।');
+                if (apiKey && apiKey !== '••••••••••••••••') {
+                     localStorage.setItem('gemini_api_key', GEMINI_API_KEY);
+                }
             } catch (error) {
-                updateApiStatus('error', '❌ API টি ত্রুটি: ' + error.message);
+                updateApiStatus('error', '❌ API ত্রুটি: ' + error.message);
+                GEMINI_API_KEY = originalKey; // Revert if test fails
             } finally {
                 hideLoading();
+                if (GEMINI_API_KEY) {
+                    apiKeyInput.value = '••••••••••••••••';
+                }
             }
         }
 
         // Update API Status
         function updateApiStatus(type, message) {
             const statusDiv = document.getElementById('apiStatus');
-            statusDiv.className = `api-status ${type}`;
-            statusDiv.innerHTML = message;
+            const baseClasses = 'api-status p-3 rounded-xl mb-5 text-center font-semibold';
+            
+            let classes = '';
+            if (type === 'success') {
+                classes = 'bg-green-100 text-green-800 border-l-4 border-green-500 bg-success';
+            } else if (type === 'error') {
+                classes = 'bg-red-100 text-red-800 border-l-4 border-red-500';
+            } else {
+                classes = 'bg-yellow-100 text-yellow-800 border-l-4 border-yellow-500 bg-warning';
+            }
+
+            statusDiv.className = `${baseClasses} ${classes}`;
+            statusDiv.innerHTML = `<i class="${type === 'success' ? 'fas fa-check-circle' : type === 'error' ? 'fas fa-times-circle' : 'fas fa-exclamation-triangle'} mr-2"></i> ${message}`;
         }
 
         // Theme functionality
@@ -970,8 +506,12 @@
             if (savedTheme === 'dark') {
                 document.documentElement.setAttribute('data-theme', 'dark');
                 themeToggle.checked = true;
+                // Manually apply slider style for initial load
+                const slider = themeToggle.nextElementSibling;
+                slider.style.backgroundColor = '#ff9800';
+                slider.querySelector(':before').style.transform = 'translateX(28px)';
             }
-
+            
             themeToggle.addEventListener('change', function() {
                 if (this.checked) {
                     document.documentElement.setAttribute('data-theme', 'dark');
@@ -993,6 +533,42 @@
                 currentFile = file;
                 displayFileInfo(file);
             });
+            
+            // Drag and drop support
+            const dropArea = document.getElementById('fileUploadArea');
+            ['dragenter', 'dragover', 'dragleave', 'drop'].forEach(eventName => {
+                dropArea.addEventListener(eventName, preventDefaults, false);
+            });
+
+            function preventDefaults (e) {
+                e.preventDefault();
+                e.stopPropagation();
+            }
+
+            ['dragenter', 'dragover'].forEach(eventName => {
+                dropArea.addEventListener(eventName, () => dropArea.classList.add('ring-4', 'ring-emerald-500'), false);
+            });
+
+            ['dragleave', 'drop'].forEach(eventName => {
+                dropArea.addEventListener(eventName, () => dropArea.classList.remove('ring-4', 'ring-emerald-500'), false);
+            });
+
+            dropArea.addEventListener('drop', handleDrop, false);
+
+            function handleDrop(e) {
+                let dt = e.dataTransfer;
+                let files = dt.files;
+                if (files.length > 0) {
+                    const file = files[0];
+                    if (file.type === 'application/pdf') {
+                        currentFile = file;
+                        document.getElementById('pdfFile').files = files; // Sync the input element
+                        displayFileInfo(file);
+                    } else {
+                        showError('অনুগ্রহ করে একটি PDF ফাইল আপলোড করুন।');
+                    }
+                }
+            }
         }
 
         // Display file information
@@ -1005,31 +581,39 @@
             
             fileName.textContent = file.name;
             fileSize.textContent = `আকার: ${fileSizeMB} MB`;
-            fileInfo.style.display = 'block';
+            fileInfo.classList.remove('hidden');
 
             // Show warning for large files
             if (file.size > 10 * 1024 * 1024) {
-                showWarning(`বড় ফাইল (${fileSizeMB} MB): প্রসেসিং বেশি সময় নিতে পারে।`);
+                showWarning(`বড় ফাইল (${fileSizeMB} MB): প্রসেসিং বেশি সময় নিতে পারে। OCR এর জন্য ১০ MB এর নিচে থাকা ভালো।`);
             }
         }
 
         // PDF type selection
-        function selectPdfType(type) {
+        function selectPdfType(type, element) {
             selectedPdfType = type;
             document.querySelectorAll('.pdf-type-option').forEach(opt => {
-                opt.classList.remove('active');
+                opt.classList.remove('active', 'ring-2', 'ring-emerald-500', 'shadow-lg');
+                opt.querySelector('i').classList.remove('text-emerald-600');
+                opt.querySelector('i').classList.add('text-gray-500');
             });
-            event.currentTarget.classList.add('active');
+            element.classList.add('active', 'ring-2', 'ring-emerald-500', 'shadow-lg');
+            element.querySelector('i').classList.add('text-emerald-600');
+            element.querySelector('i').classList.remove('text-gray-500');
+
+            if(type === 'ocr' && currentFile && currentFile.size > 10 * 1024 * 1024) {
+                showWarning('⚠️ স্ক্যান করা PDF (OCR) খুবই ধীর প্রক্রিয়া, বিশেষ করে বড় ফাইলের জন্য (১০+ MB)। অল্প পৃষ্ঠা নিয়ে চেষ্টা করুন।');
+            }
         }
 
         // Stop translation function
         function stopTranslation() {
             if (isTranslationRunning) {
                 isTranslationRunning = false;
-                document.getElementById('stopBtn').style.display = 'none';
+                document.getElementById('stopBtn').classList.add('hidden');
                 document.getElementById('extractTranslateBtn').disabled = false;
                 hideLoading();
-                document.getElementById('progressContainer').style.display = 'none';
+                document.getElementById('progressContainer').classList.add('hidden');
                 showWarning('অনুবাদ বন্ধ করা হয়েছে!');
                 
                 // Clean up Tesseract worker if it exists
@@ -1043,28 +627,32 @@
         // Main translation function
         async function extractAndTranslate() {
             if (!currentFile) {
-                alert('দয়া করে প্রথমে একটি PDF ফাইল সিলেক্ট করুন।');
+                showError('দয়া করে প্রথমে একটি PDF ফাইল সিলেক্ট করুন।');
                 return;
             }
 
             if (!GEMINI_API_KEY) {
-                alert('দয়া করে প্রথমে একটি বৈধ জিমিনি API কী সেট করুন।');
+                showError('দয়া করে প্রথমে একটি বৈধ জিমিনি API কী সেট করুন।');
                 document.getElementById('apiKeyInput').focus();
                 return;
             }
 
             // File size validation
             if (currentFile.size > 20 * 1024 * 1024) {
-                alert('ফাইল খুব বড়! দয়া করে ২০ এমবি-এর ছোট ফাইল আপলোড করুন।');
+                showError('ফাইল খুব বড়! দয়া করে ২০ এমবি-এর ছোট ফাইল আপলোড করুন।');
                 return;
             }
 
             const extractTranslateBtn = document.getElementById('extractTranslateBtn');
             extractTranslateBtn.disabled = true;
-            document.getElementById('stopBtn').style.display = 'inline-flex';
+            document.getElementById('stopBtn').classList.remove('hidden');
             isTranslationRunning = true;
 
             try {
+                // Clear previous text
+                document.getElementById('arabicText').value = '';
+                document.getElementById('banglaText').value = '';
+
                 showLoading('PDF প্রসেস করা হচ্ছে...');
                 
                 if (selectedPdfType === 'ocr') {
@@ -1081,12 +669,12 @@
             } catch (error) {
                 if (isTranslationRunning) {
                     console.error('Translation error:', error);
-                    alert('ত্রুটি: ' + (error.message || 'অনুবাদ করতে সমস্যা হয়েছে'));
+                    showError('ত্রুটি: ' + (error.message || 'অনুবাদ করতে সমস্যা হয়েছে'));
                 }
             } finally {
                 if (isTranslationRunning) {
                     extractTranslateBtn.disabled = false;
-                    document.getElementById('stopBtn').style.display = 'none';
+                    document.getElementById('stopBtn').classList.add('hidden');
                     hideLoading();
                     isTranslationRunning = false;
                 }
@@ -1097,60 +685,59 @@
         async function extractNormalAndTranslate(file) {
             try {
                 const pdf = await pdfjsLib.getDocument(await file.arrayBuffer()).promise;
-                const totalPages = Math.min(pdf.numPages, 400); // 20 pages maximum
+                const maxPages = 400; // Limit pages to prevent memory issues
+                const totalPages = Math.min(pdf.numPages, maxPages);
                 let arabicText = '';
                 let banglaTranslation = '';
 
-                document.getElementById('progressContainer').style.display = 'block';
+                document.getElementById('progressContainer').classList.remove('hidden');
 
                 for (let i = 1; i <= totalPages; i++) {
-                    // Check if translation was stopped
-                    if (!isTranslationRunning) {
-                        console.log('Translation stopped by user');
-                        return;
-                    }
+                    if (!isTranslationRunning) { return; }
 
-                    showLoading(`পৃষ্ঠা ${i}/${totalPages} প্রসেস করা হচ্ছে...`);
+                    showLoading(`পৃষ্ঠা ${i}/${totalPages} (টেক্সট) প্রসেস করা হচ্ছে...`);
                     
-                    // Extract text from page
                     const page = await pdf.getPage(i);
                     const content = await page.getTextContent();
                     const pageText = content.items.map(item => item.str).join(' ');
                     
                     if (pageText.trim().length > 0) {
-                        arabicText += `পৃষ্ঠা ${i}:\n${pageText}\n\n`;
+                        arabicText += `\n\n--- পৃষ্ঠা ${i} ---\n${pageText}`;
                         document.getElementById('arabicText').value = arabicText;
 
-                        // Use actual Gemini API for translation
+                        // Translate in chunks (simulate API call with delay/backoff)
+                        showLoading(`পৃষ্ঠা ${i}/${totalPages} অনুবাদ করা হচ্ছে...`);
                         const translatedText = await translateWithGemini(pageText);
-                        banglaTranslation += `পৃষ্ঠা ${i}:\n${translatedText}\n\n`;
+                        
+                        // Append and scroll to bottom
+                        banglaTranslation += `\n\n--- পৃষ্ঠা ${i} ---\n${translatedText}`;
                         document.getElementById('banglaText').value = banglaTranslation;
+                        document.getElementById('banglaText').scrollTop = document.getElementById('banglaText').scrollHeight;
+                        document.getElementById('arabicText').scrollTop = document.getElementById('arabicText').scrollHeight;
                     }
 
-                    // Update progress
                     const progress = Math.round((i / totalPages) * 100);
                     updateProgress(progress);
 
-                    // Add delay to prevent rate limiting
-                    await delay(2000);
+                    await delay(1500); // Wait between API calls to prevent aggressive rate limiting
                 }
 
                 if (isTranslationRunning) {
                     extractedText = arabicText;
-                    document.getElementById('progressContainer').style.display = 'none';
+                    document.getElementById('progressContainer').classList.add('hidden');
                     showSuccess(`${totalPages} পৃষ্ঠা সফলভাবে অনুবাদ করা হয়েছে!`);
                 }
 
             } catch (error) {
                 if (isTranslationRunning) {
-                    throw new Error('PDF পড়তে সমস্যা: ' + error.message);
+                    throw new Error('PDF পড়তে বা অনুবাদ করতে সমস্যা: ' + error.message);
                 }
             }
         }
 
         // OCR extraction with translation
         async function extractWithOCRAndTranslate(file) {
-            showLoading('OCR প্রস্তুত করা হচ্ছে...');
+            showLoading('OCR ইঞ্জিন প্রস্তুত করা হচ্ছে...');
             
             try {
                 if (!tesseractWorker) {
@@ -1158,27 +745,20 @@
                 }
 
                 const pdf = await pdfjsLib.getDocument(await file.arrayBuffer()).promise;
-                const totalPages = Math.min(pdf.numPages, 10); // 10 pages maximum for OCR
+                const maxPages = 10; // Hard limit for OCR due to high resource usage
+                const totalPages = Math.min(pdf.numPages, maxPages);
                 let arabicText = '';
                 let banglaTranslation = '';
 
-                document.getElementById('progressContainer').style.display = 'block';
+                document.getElementById('progressContainer').classList.remove('hidden');
 
                 for (let i = 1; i <= totalPages; i++) {
-                    // Check if translation was stopped
-                    if (!isTranslationRunning) {
-                        console.log('Translation stopped by user');
-                        if (tesseractWorker) {
-                            tesseractWorker.terminate();
-                            tesseractWorker = null;
-                        }
-                        return;
-                    }
+                    if (!isTranslationRunning) { return; }
 
-                    showLoading(`পৃষ্ঠা ${i}/${totalPages} OCR করা হচ্ছে...`);
+                    showLoading(`পৃষ্ঠা ${i}/${totalPages} (OCR) করা হচ্ছে... এটি সময়সাপেক্ষ...`);
                     
                     const page = await pdf.getPage(i);
-                    const viewport = page.getViewport({ scale: 1.5 });
+                    const viewport = page.getViewport({ scale: 2.0 }); // Increased scale for better OCR accuracy
                     
                     const canvas = document.createElement('canvas');
                     const context = canvas.getContext('2d');
@@ -1190,98 +770,129 @@
                         viewport: viewport
                     }).promise;
 
+                    // Tesseract OCR
                     const { data: { text } } = await tesseractWorker.recognize(canvas);
                     
                     if (text.trim().length > 0) {
-                        arabicText += `পৃষ্ঠা ${i}:\n${text}\n\n`;
+                        arabicText += `\n\n--- পৃষ্ঠা ${i} ---\n${text}`;
                         document.getElementById('arabicText').value = arabicText;
 
-                        // Use actual Gemini API for translation
+                        // Translate the OCR text
+                        showLoading(`পৃষ্ঠা ${i}/${totalPages} অনুবাদ করা হচ্ছে...`);
                         const translatedText = await translateWithGemini(text);
-                        banglaTranslation += `পৃষ্ঠা ${i}:\n${translatedText}\n\n`;
+                        
+                        // Append and scroll to bottom
+                        banglaTranslation += `\n\n--- পৃষ্ঠা ${i} ---\n${translatedText}`;
                         document.getElementById('banglaText').value = banglaTranslation;
+                        document.getElementById('banglaText').scrollTop = document.getElementById('banglaText').scrollHeight;
+                        document.getElementById('arabicText').scrollTop = document.getElementById('arabicText').scrollHeight;
                     }
 
-                    // Update progress
                     const progress = Math.round((i / totalPages) * 100);
                     updateProgress(progress);
 
-                    await delay(2500);
+                    await delay(2500); // Longer delay for OCR to API sequence
                 }
 
                 if (isTranslationRunning) {
                     extractedText = arabicText;
-                    document.getElementById('progressContainer').style.display = 'none';
+                    document.getElementById('progressContainer').classList.add('hidden');
                     showSuccess(`${totalPages} পৃষ্ঠা OCR এবং অনুবাদ সম্পূর্ণ!`);
+                }
+                
+                // Terminate worker after use
+                if (tesseractWorker) {
+                    await tesseractWorker.terminate();
+                    tesseractWorker = null;
                 }
 
             } catch (error) {
                 if (isTranslationRunning) {
-                    throw new Error('OCR ত্রুটি: ' + error.message);
+                    if (tesseractWorker) {
+                        await tesseractWorker.terminate();
+                        tesseractWorker = null;
+                    }
+                    throw new Error('OCR বা অনুবাদ ত্রুটি: ' + error.message);
                 }
             }
         }
-
-        // Real Gemini API translation
+        
+        // Real Gemini API translation with Exponential Backoff
         async function translateWithGemini(text, isTest = false) {
             if (!GEMINI_API_KEY) {
                 throw new Error('API কী পাওয়া যায়নি। দয়া করে API কী সেট করুন।');
             }
-
-            // Check if translation was stopped
-            if (!isTranslationRunning) {
+            if (!isTranslationRunning && !isTest) {
                 return "অনুবাদ বন্ধ করা হয়েছে";
             }
+            
+            const maxRetries = 5;
+            let attempt = 0;
+            const truncatedText = text.substring(0, 3000); // Keep prompt small
 
-            try {
-                const apiUrl = `${GEMINI_API_URL}?key=${GEMINI_API_KEY}`;
-                
-                const requestBody = {
-                    contents: [{
-                        parts: [{
-                            text: `Translate this Arabic Islamic text to natural Bangla accurately. Preserve religious meaning and Islamic terminology. Keep the translation concise and natural. Only return the translated text, no additional comments.
-                            
-                            Arabic Text: ${text.substring(0, 3000)}`
-                        }]
-                    }],
-                    generationConfig: {
-                        temperature: 0.3,
-                        topK: 40,
-                        topP: 0.8,
-                        maxOutputTokens: 2000,
+            while (attempt < maxRetries) {
+                try {
+                    const apiUrl = `${GEMINI_API_URL}?key=${GEMINI_API_KEY}`;
+                    
+                    const requestBody = {
+                        contents: [{
+                            parts: [{
+                                text: `Translate this Arabic Islamic text to natural Bangla accurately. Preserve religious meaning and Islamic terminology (like Allah, Prophet, Hadith, etc.). Maintain the original formatting (paragraphs, lists) as much as possible. Keep the translation concise, natural, and highly accurate. Only return the translated text, no additional comments or introductions.
+
+                                Arabic Text: ${truncatedText}`
+                            }]
+                        }],
+                        generationConfig: {
+                            temperature: 0.3,
+                            topK: 40,
+                            topP: 0.8,
+                            maxOutputTokens: 2048,
+                        },
+                         // Enforce the use of the latest stable model
+                        model: "gemini-2.5-flash"
+                    };
+
+                    const response = await fetch(apiUrl, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify(requestBody)
+                    });
+
+                    const data = await response.json();
+
+                    if (!response.ok) {
+                        const errorMessage = data.error?.message || `API Error: ${response.status}`;
+                        // Check for rate limit (429) or temporary server errors (500/503)
+                        if (response.status === 429 || response.status >= 500) {
+                            console.warn(`API attempt ${attempt + 1} failed with status ${response.status}. Retrying...`);
+                            throw new Error(errorMessage); // Throw to trigger backoff
+                        } else {
+                            // Non-retryable error (e.g., 400 Bad Request, Invalid API Key)
+                            if (isTest) return 'API_ERROR: ' + errorMessage;
+                            throw new Error(errorMessage);
+                        }
                     }
-                };
+                    
+                    const translatedText = data.candidates?.[0]?.content?.parts?.[0]?.text || "অনুবাদ করার সময় কোনো টেক্সট পাওয়া যায়নি।";
+                    
+                    if (isTest) {
+                        return 'API_TEST_SUCCESS';
+                    }
+                    
+                    return translatedText;
 
-                const response = await fetch(apiUrl, {
-                    method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/json',
-                    },
-                    body: JSON.stringify(requestBody)
-                });
-
-                if (!response.ok) {
-                    const errorData = await response.json();
-                    throw new Error(errorData.error?.message || `API Error: ${response.status}`);
+                } catch (error) {
+                    attempt++;
+                    if (attempt >= maxRetries) {
+                        if (isTest) return 'API_ERROR: Max retries exceeded: ' + error.message;
+                        throw new Error(`অনুবাদ ব্যর্থ: API সর্বোচ্চ সংখ্যকবার চেষ্টা করার পরেও সাড়া দেয়নি। ${error.message}`);
+                    }
+                    const delayTime = Math.pow(2, attempt) * 1000 + Math.random() * 1000;
+                    await delay(delayTime);
                 }
-
-                const data = await response.json();
-                const translatedText = data.candidates[0].content.parts[0].text;
-                
-                if (isTest) {
-                    return 'API_TEST_SUCCESS';
-                }
-                
-                return translatedText;
-
-            } catch (error) {
-                console.error('Gemini API error:', error);
-                if (isTest) {
-                    return 'API_ERROR: ' + error.message;
-                }
-                throw new Error(`অনুবাদ ব্যর্থ: ${error.message}`);
             }
         }
+
 
         // Utility functions
         function delay(ms) {
@@ -1289,12 +900,12 @@
         }
 
         function showLoading(message) {
-            document.getElementById('loading').style.display = 'block';
+            document.getElementById('loading').classList.remove('hidden');
             document.getElementById('loadingText').textContent = message;
         }
 
         function hideLoading() {
-            document.getElementById('loading').style.display = 'none';
+            document.getElementById('loading').classList.add('hidden');
         }
 
         function updateProgress(percent) {
@@ -1302,78 +913,90 @@
             document.getElementById('progressBar').textContent = percent + '%';
         }
 
-        function showWarning(message) {
-            alert('⚠️ ' + message);
-        }
-
-        function showSuccess(message) {
-            alert('✅ ' + message);
-        }
-
         // Tab navigation
-        function showTab(tabName) {
+        function showTab(tabName, element) {
             document.querySelectorAll('.main-card').forEach(tab => {
                 tab.classList.add('hidden');
             });
             
             document.querySelectorAll('.nav-tab').forEach(tab => {
-                tab.classList.remove('active');
+                tab.classList.remove('active', 'bg-emerald-600', 'text-white', 'shadow-md', 'hover:bg-emerald-700');
+                tab.classList.add('text-gray-600', 'hover:bg-gray-100', 'hover:text-gray-800');
             });
             
             document.getElementById(tabName + '-tab').classList.remove('hidden');
-            event.currentTarget.classList.add('active');
+            element.classList.add('active', 'bg-emerald-600', 'text-white', 'shadow-md');
+            element.classList.remove('text-gray-600', 'hover:bg-gray-100', 'hover:text-gray-800');
+
+            // Load history only when history tab is clicked
+            if (tabName === 'history') {
+                loadHistory();
+            }
         }
 
         // Reader functionality
         function openReader(type) {
             const modal = document.getElementById('readerModal');
             const title = document.getElementById('readerTitle');
-            const body = document.getElementById('readerBody');
+            const contentDiv = modal.querySelector('.reader-content-text');
+            const readerBody = document.getElementById('readerBody');
             
             let content = '';
+            
             if (type === 'arabic') {
                 title.textContent = 'আরবি টেক্সট';
                 content = document.getElementById('arabicText').value || 'কোনো টেক্সট নেই';
-                body.innerHTML = `<div class="arabic-text" style="font-size: 24px; line-height: 3;">${content}</div>`;
+                contentDiv.className = 'reader-content-text arabic-text text-3xl leading-relaxed';
+                contentDiv.textContent = content;
             } else {
                 title.textContent = 'বাংলা অনুবাদ';
                 content = document.getElementById('banglaText').value || 'কোনো অনুবাদ নেই';
-                body.innerHTML = `<div class="bangla-text" style="font-size: 20px; line-height: 2;">${content}</div>`;
+                contentDiv.className = 'reader-content-text bangla-text text-xl leading-relaxed';
+                contentDiv.textContent = content;
             }
             
-            modal.style.display = 'block';
+            modal.classList.remove('hidden');
             
+            // Reset reader theme to match global theme
+            if (document.documentElement.getAttribute('data-theme') === 'dark') {
+                readerBody.classList.add('bg-gray-800', 'text-gray-200');
+            } else {
+                readerBody.classList.remove('bg-gray-800', 'text-gray-200');
+            }
+
             // Stop any ongoing speech when opening reader
             stopSpeech();
         }
 
         function closeReader() {
-            // Stop speech when closing reader
             stopSpeech();
-            document.getElementById('readerModal').style.display = 'none';
+            document.getElementById('readerModal').classList.add('hidden');
         }
 
         function changeFontSize(delta) {
-            const body = document.getElementById('readerBody');
-            const currentSize = parseInt(window.getComputedStyle(body.querySelector('div')).fontSize);
-            const newSize = Math.max(12, Math.min(40, currentSize + delta));
-            body.querySelector('div').style.fontSize = newSize + 'px';
+            const contentDiv = document.getElementById('readerModal').querySelector('.reader-content-text');
+            const currentSize = parseInt(window.getComputedStyle(contentDiv).fontSize);
+            const newSize = Math.max(16, Math.min(50, currentSize + delta));
+            contentDiv.style.fontSize = newSize + 'px';
         }
 
         function toggleDarkReader() {
             const body = document.getElementById('readerBody');
-            const isDark = body.style.backgroundColor === 'rgb(26, 32, 44)';
+            const toggleButton = document.getElementById('readerModal').querySelector('.reader-controls button:nth-child(3)');
+            const isDark = body.classList.contains('bg-gray-800');
             
             if (isDark) {
-                body.style.backgroundColor = '';
-                body.style.color = '';
+                body.classList.remove('bg-gray-800', 'text-gray-200');
+                body.classList.add('bg-white', 'text-gray-800');
+                toggleButton.innerHTML = '<i class="fas fa-moon mr-2"></i> নাইট মোড';
             } else {
-                body.style.backgroundColor = '#1A202C';
-                body.style.color = '#CBD5E0';
+                body.classList.add('bg-gray-800', 'text-gray-200');
+                body.classList.remove('bg-white', 'text-gray-800');
+                toggleButton.innerHTML = '<i class="fas fa-sun mr-2"></i> ডে মোড';
             }
         }
 
-        // Text-to-speech with toggle functionality
+        // Text-to-speech with toggle functionality (using native browser TTS)
         function toggleSpeakText() {
             if (isSpeaking) {
                 stopSpeech();
@@ -1383,9 +1006,11 @@
         }
 
         function speakText() {
-            const text = document.getElementById('readerBody').textContent;
-            if (!text || text === 'কোনো অনুবাদ নেই' || text === 'কোনো টেক্সট নেই') {
-                alert('পড়ার জন্য কোনো টেক্সট নেই।');
+            const text = document.getElementById('readerModal').querySelector('.reader-content-text').textContent;
+            const language = document.getElementById('readerTitle').textContent.includes('বাংলা') ? 'bn-BD' : 'ar-SA';
+            
+            if (!text || text.includes('নেই')) {
+                showWarning('পড়ার জন্য কোনো টেক্সট নেই।');
                 return;
             }
 
@@ -1393,14 +1018,14 @@
                 stopSpeech(); // Stop any ongoing speech first
                 
                 const utterance = new SpeechSynthesisUtterance(text);
-                utterance.lang = 'bn-BD';
+                utterance.lang = language;
                 utterance.rate = 0.8;
                 utterance.pitch = 1;
                 
                 // Update button state
                 isSpeaking = true;
                 const ttsButton = document.getElementById('ttsButton');
-                ttsButton.innerHTML = '<i class="fas fa-stop"></i> থামুন';
+                ttsButton.innerHTML = '<i class="fas fa-stop mr-2"></i> থামুন';
                 ttsButton.classList.add('tts-active');
                 
                 // Handle speech end
@@ -1409,14 +1034,15 @@
                 };
                 
                 // Handle speech error
-                utterance.onerror = function() {
+                utterance.onerror = function(e) {
+                    console.error('TTS Error:', e);
                     stopSpeech();
-                    alert('Text-to-speech ত্রুটি হয়েছে।');
+                    showError('Text-to-speech ত্রুটি হয়েছে।');
                 };
                 
                 speechSynthesis.speak(utterance);
             } else {
-                alert('Text-to-speech is not supported in your browser.');
+                showError('আপনার ব্রাউজারে Text-to-speech সমর্থিত নয়।');
             }
         }
 
@@ -1426,22 +1052,30 @@
             }
             isSpeaking = false;
             const ttsButton = document.getElementById('ttsButton');
-            ttsButton.innerHTML = '<i class="fas fa-volume-up"></i> পড়ুন';
+            ttsButton.innerHTML = '<i class="fas fa-volume-up mr-2"></i> পড়ুন';
             ttsButton.classList.remove('tts-active');
         }
 
-        // History functionality
+        // History functionality (Uses localStorage - limited storage for full text)
         function saveToHistory() {
+            const fullArabicText = document.getElementById('arabicText').value;
+            const fullBanglaText = document.getElementById('banglaText').value;
+
+            if (fullBanglaText.trim().length === 0) return;
+
             const history = JSON.parse(localStorage.getItem('translationHistory') || '[]');
             const newItem = {
                 id: Date.now(),
                 title: currentFile?.name || 'অনুবাদ',
-                arabicText: document.getElementById('arabicText').value.substring(0, 200) + '...',
-                banglaText: document.getElementById('banglaText').value.substring(0, 200) + '...',
-                date: new Date().toLocaleDateString('bn-BD')
+                // Store only a preview of the text due to localStorage size limitations
+                arabicText: fullArabicText.substring(0, 500) + (fullArabicText.length > 500 ? '...' : ''),
+                banglaText: fullBanglaText.substring(0, 500) + (fullBanglaText.length > 500 ? '...' : ''),
+                date: new Date().toLocaleDateString('bn-BD', { day: '2-digit', month: 'short', year: 'numeric' })
             };
             
             history.unshift(newItem);
+            // Keep history limited to 10 items
+            if (history.length > 10) history.pop(); 
             localStorage.setItem('translationHistory', JSON.stringify(history));
             loadHistory();
         }
@@ -1452,21 +1086,22 @@
             
             if (history.length === 0) {
                 historyGrid.innerHTML = `
-                    <div style="text-align: center; color: var(--text-light); padding: 40px;">
-                        <i class="fas fa-inbox" style="font-size: 3rem; margin-bottom: 20px;"></i>
-                        <p>কোনো অনুবাদ ইতিহাস নেই</p>
+                    <div class="text-center text-gray-500 p-10 col-span-full">
+                        <i class="fas fa-inbox text-5xl mb-4 text-gray-300"></i>
+                        <p class="text-lg">কোনো অনুবাদ ইতিহাস নেই</p>
                     </div>
                 `;
                 return;
             }
 
             historyGrid.innerHTML = history.map(item => `
-                <div class="history-card" onclick="loadHistoryItem(${item.id})">
-                    <div class="history-card-header">
-                        <div class="history-title">${item.title}</div>
-                        <div class="history-date">${item.date}</div>
+                <div class="history-card bg-white bg-card rounded-xl p-5 shadow-lg border border-gray-200 border-light transition duration-300 cursor-pointer hover:shadow-xl hover:translate-y-[-3px]" onclick="loadHistoryItem(${item.id})">
+                    <div class="flex justify-between items-start mb-3 border-b pb-2 border-gray-100 border-light">
+                        <div class="history-title font-bold text-gray-800 text-base text-lg truncate">${item.title}</div>
+                        <div class="history-date text-gray-500 text-sm whitespace-nowrap ml-4 text-muted">${item.date}</div>
                     </div>
-                    <div class="history-preview">${item.banglaText}</div>
+                    <p class="history-preview text-gray-600 text-sm line-clamp-3 text-muted">${item.banglaText}</p>
+                    <p class="text-xs text-emerald-600 mt-2 font-medium">সম্পূর্ণ টেক্সট লোড করতে ক্লিক করুন</p>
                 </div>
             `).join('');
         }
@@ -1476,32 +1111,36 @@
             const item = history.find(h => h.id === id);
             
             if (item) {
-                // For demo, we only have preview text in history
-                // In real implementation, you'd store full text
-                document.getElementById('arabicText').value = item.arabicText;
-                document.getElementById('banglaText').value = item.banglaText;
-                showTab('translate');
-                showSuccess('ইতিহাস থেকে লোড করা হয়েছে!');
+                // Warning: Since we only store a preview, we warn the user. 
+                // In a real app, you would fetch the full text from Firestore/backend.
+                document.getElementById('arabicText').value = `[ইতিহাস লোড] ${item.arabicText}\n\n--- বাকি অংশ সংরক্ষণ করা হয়নি (ডেমো সীমাবদ্ধতা) ---`;
+                document.getElementById('banglaText').value = `[ইতিহাস লোড] ${item.banglaText}\n\n--- বাকি অংশ সংরক্ষণ করা হয়নি (ডেমো সীমাবদ্ধতা) ---`;
+                
+                // Manually trigger tab switch
+                document.querySelectorAll('.nav-tab')[0].click(); 
+                showNotification('ইতিহাস থেকে প্রিভিউ লোড করা হয়েছে। সম্পূর্ণ টেক্সট দেখতে, ফাইলটি পুনরায় আপলোড করুন।', 'info');
             }
         }
 
         // Clear all function
         function clearAll() {
-            // Stop any ongoing translation first
             stopTranslation();
             
             document.getElementById('pdfFile').value = '';
             document.getElementById('arabicText').value = '';
             document.getElementById('banglaText').value = '';
-            document.getElementById('fileInfo').style.display = 'none';
-            document.getElementById('progressContainer').style.display = 'none';
+            document.getElementById('fileInfo').classList.add('hidden');
+            document.getElementById('progressContainer').classList.add('hidden');
+            document.getElementById('extractTranslateBtn').disabled = false;
+            document.getElementById('stopBtn').classList.add('hidden');
+
             currentFile = null;
             extractedText = '';
             
             // Stop any ongoing speech
             stopSpeech();
             
-            alert('সব কিছু রিসেট করা হয়েছে।');
+            showNotification('সব কিছু রিসেট করা হয়েছে।', 'info');
         }
 
         // Close modal when clicking outside
