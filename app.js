@@ -29,7 +29,7 @@ function loadApiKey() {
     document.getElementById("apiKeyInput").value = "••••••••••••••••";
     updateApiStatus(
       "success",
-      "✅ API কী লোড হয়েছে! আপনি এখন অনুবাদ করতে পারেন।",
+      "✅ API টি লোড হয়েছে! আপনি এখন অনুবাদ করতে পারেন।",
     );
   }
 }
@@ -38,7 +38,7 @@ function loadApiKey() {
 function saveApiKey() {
   const apiKey = document.getElementById("apiKeyInput").value.trim();
   if (!apiKey) {
-    alert("দয়া করে একটি বৈধ API কী দিন।");
+    alert("দয়া করে একটি বৈধ API দিন।");
     return;
   }
 
@@ -52,7 +52,7 @@ function saveApiKey() {
   document.getElementById("apiKeyInput").value = "••••••••••••••••";
   updateApiStatus(
     "success",
-    "✅ API কী সংরক্ষণ করা হয়েছে! আপনি এখন অনুবাদ করতে পারেন।",
+    "✅ API টি সংরক্ষণ করা হয়েছে! আপনি এখন অনুবাদ করতে পারেন।",
   );
 }
 
@@ -62,7 +62,7 @@ async function testApiKey() {
 
   if (!apiKey || apiKey === "••••••••••••••••") {
     if (!GEMINI_API_KEY) {
-      alert("দয়া করে প্রথমে একটি API কী দিন।");
+      alert("দয়া করে প্রথমে একটি API টি দিন।");
       return;
     }
     // Use existing key
@@ -71,16 +71,16 @@ async function testApiKey() {
     localStorage.setItem("gemini_api_key", apiKey);
   }
 
-  showLoading("API কী টেস্ট করা হচ্ছে...");
+  showLoading("API টি টেস্ট করা হচ্ছে...");
 
   try {
     const testResult = await translateWithGemini("سلام", true);
     if (testResult.includes("API_ERROR")) {
-      throw new Error("API কীটি বৈধ নয়");
+      throw new Error("API টি বৈধ নয়");
     }
-    updateApiStatus("success", "✅ API কী সঠিক! আপনি এখন অনুবাদ করতে পারেন।");
+    updateApiStatus("success", "✅ API টি সঠিক! আপনি এখন অনুবাদ করতে পারেন।");
   } catch (error) {
-    updateApiStatus("error", "❌ API কী ত্রুটি: " + error.message);
+    updateApiStatus("error", "❌ API টি ত্রুটি: " + error.message);
   } finally {
     hideLoading();
   }
@@ -96,7 +96,7 @@ function updateApiStatus(type, message) {
 // Theme functionality
 function initializeTheme() {
   const themeToggle = document.getElementById("themeToggle");
-  const savedTheme = localStorage.getItem("theme") || "light";
+  const savedTheme = localStorage.getItem("theme") || "light"; 
 
   if (savedTheme === "dark") {
     document.documentElement.setAttribute("data-theme", "dark");
@@ -355,7 +355,7 @@ async function extractWithOCRAndTranslate(file) {
 // Real Gemini API translation
 async function translateWithGemini(text, isTest = false) {
   if (!GEMINI_API_KEY) {
-    throw new Error("API কী পাওয়া যায়নি। দয়া করে API কী সেট করুন।");
+    throw new Error("API টি পাওয়া যায়নি। দয়া করে API টিসেট করুন।");
   }
 
   // Check if translation was stopped
