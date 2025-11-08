@@ -96,7 +96,8 @@ function updateApiStatus(type, message) {
 // Theme functionality
 function initializeTheme() {
   const themeToggle = document.getElementById("themeToggle");
-  const savedTheme = localStorage.getItem("theme") || "light"; 
+  // Change default to "dark" so the app loads in dark mode when no saved preference exists
+  const savedTheme = localStorage.getItem("theme") || "dark"; 
 
   if (savedTheme === "dark") {
     document.documentElement.setAttribute("data-theme", "dark");
@@ -371,7 +372,7 @@ async function translateWithGemini(text, isTest = false) {
         {
           parts: [
             {
-              text: `Translate this Arabic Islamic text to natural Bangla accurately. Preserve religious meaning and Islamic terminology. Keep the translation concise and natural. Only return the translated text, no additional comments.
+              text: `Translate this Arabic Islamic text to natural Bangla accurately. Preserve religious meaning and Islamic terminology. Keep the translation concise and natural. Only return the tran[...]
                             
                             Arabic Text: ${text.substring(0, 3000)}`,
             },
@@ -630,6 +631,7 @@ function loadHistoryItem(id) {
     document.getElementById("arabicText").value = item.arabicText;
     document.getElementById("banglaText").value = item.banglaText;
     showTab("translate");
+    
     showSuccess("ইতিহাস থেকে লোড করা হয়েছে!");
   }
 }
