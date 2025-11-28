@@ -397,6 +397,238 @@ document.addEventListener('DOMContentLoaded', function () {
   loadHistory();
   initializeEnhancedFeatures(); // Initialize new features
 });
+// ==================== ENCRYPTED API KEY MANAGEMENT ====================
+
+// CryptoJS AES Encryption (Most Secure)
+const ENCRYPTION_KEY = 'al-bayan-secure-key-2025-32chars!!'; // 32 characters
+
+function encryptWithCryptoJS(apiKey) {
+  try {
+    return CryptoJS.AES.encrypt(apiKey, ENCRYPTION_KEY).toString();
+  } catch (error) {
+    console.error('Encryption error:', error);
+    return null;
+  }
+}
+
+function decryptWithCryptoJS(encryptedKey) {
+  try {
+    const bytes = CryptoJS.AES.decrypt(encryptedKey, ENCRYPTION_KEY);
+    return bytes.toString(CryptoJS.enc.Utf8);
+  } catch (error) {
+    console.error('Decryption error:', error);
+    return null;
+  }
+}
+
+// Enhanced API Key Management
+class ApiKeyManager {
+  constructor() {
+    this.storageKey = 'encrypted_gemini_key_v2';
+  }
+  
+  saveApiKey(apiKey) {
+    if (!apiKey || apiKey.trim() === '') {
+      throw new Error('API key cannot be empty');
+    }
+    
+    // Clean the API key
+    apiKey = apiKey.trim().replace(/\s/g, '');
+    
+    const encryptedKey = encryptWithCryptoJS(apiKey);
+    if (!encryptedKey) {
+      throw new Error('Encryption failed');
+    }
+    
+    localStorage.setItem(this.storageKey, encryptedKey);
+    GEMINI_API_KEY = apiKey;
+    
+    // Also store a hash for verification
+    const keyHash = this.generateHash(apiKey);
+    localStorage.setItem('api_key_hash', keyHash);
+    
+    return true;
+  }
+  
+  loadApiKey() {
+    try {
+      const encryptedKey = localStorage.getItem(this.storageKey);
+      if (!encryptedKey) return false;
+      
+      const decryptedKey = decryptWithCryptoJS(encryptedKey);
+      if (!decryptedKey) {
+        this.clearApiKey();
+        return false;
+      }
+      
+      // Verify the key hash
+      const storedHash = localStorage.getItem('api_key_hash');
+      const currentHash = this.generateHash(decryptedKey);
+      
+      if (storedHash !== currentHash) {
+        console.warn('API key verification failed');
+        this.clearApiKey();
+        return false;
+      }
+      
+      GEMINI_API_KEY = decryptedKey;
+      return true;
+      
+    } catch (error) {
+      console.error('Error loading API key:', error);
+      return false;
+    }
+  }
+  
+  clearApiKey() {
+    localStorage.removeItem(this.storageKey);
+    localStorage.removeItem('api_key_hash');
+    GEMINI_API_KEY = '';
+  }
+  
+  generateHash(text) {
+    let hash = 0;
+    for (let i = 0; i < text.length; i++) {
+      const char = text.charCodeAt(i);
+      hash = ((hash << 5) - hash) + char;
+      hash = hash & hash;
+    }
+    return hash.toString();
+  }
+  
+  hasApiKey() {
+    return !!localStorage.getItem(this.storageKey);
+  }
+}
+
+// Initialize API Key Manager
+const apiKeyManager = new ApiKeyManager();
+
+// Replace your existing API key functions
+function saveApiKey() {
+  const apiKeyInput = document.getElementById('apiKeyInput');
+  let apiKey = apiKeyInput.value.trim();
+  
+  // If input is masked, don't save again
+  if (apiKey === '••••••••••••••••') {
+    showNotification('API কী ইতিমধ্যে সংরক্ষিত আছে', 'info');
+    return;
+  }
+  
+  if (!apiKey) {
+    showNotification('দয়া করে API কী ইনপুট দিন', 'error');
+    return;
+  }
+  
+  try {
+    apiKeyManager.saveApiKey(apiKey);
+    apiKeyInput.value = '••••••••••••••••';
+    showNotification('✅ API কী সুরক্ষিতভাবে সংরক্ষণ করা হয়েছে!', 'success');
+    updateApiStatus('success', '✅ API টি সংরক্ষণ করা হয়েছে! আপনি এখন অনুবাদ করতে পারেন।');
+  } catch (error) {
+    showNotification('সংরক্ষণ ব্যর্থ: ' + error.message, 'error');
+  }
+}
+
+function loadApiKey() {
+  const success = apiKeyManager.loadApiKey();
+  if (success) {
+    document.getElementById('apiKeyInput').value = '••••••••••••••••';
+    updateApiStatus('success', '✅ API টি লোড হয়েছে! আপনি এখন অনুবাদ করতে পারেন।');
+  }
+  return success;
+}
+
+function clearApiKey() {
+  if (confirm('আপনি কি নিশ্চিত যে API কী ডিলিট করতে চান?')) {
+    apiKeyManager.clearApiKey();
+    document.getElementById('apiKeyInput').value = '';
+    updateApiStatus('warning', '🔑 API কী প্রয়োজন। নিচে আপনার API কী দিন।');
+    showNotification('API কী ডিলিট করা হয়েছে', 'info');
+  }
+}
+
+function showApiKey() {
+  const apiKeyInput = document.getElementById('apiKeyInput');
+  
+  if (apiKeyInput.type === 'password' && GEMINI_API_KEY) {
+    apiKeyInput.type = 'text';
+    apiKeyInput.value = GEMINI_API_KEY;
+    
+    // Auto hide after 5 seconds
+    setTimeout(() => {
+      apiKeyInput.type = 'password';
+      apiKeyInput.value = '••••••••••••••••';
+    }, 5000);
+  }
+}
+
+// Enhanced test API function
+async function testApiKey() {
+  const apiKeyInput = document.getElementById('apiKeyInput');
+  let apiKey = apiKeyInput.value.trim();
+  
+  // If input is masked, use stored key
+  if (apiKey === '••••••••••••••••') {
+    if (!GEMINI_API_KEY) {
+      showNotification('দয়া করে প্রথমে একটি API কী সেভ করুন', 'error');
+      return;
+    }
+    apiKey = GEMINI_API_KEY;
+  } else {
+    // Save the key first if it's new
+    try {
+      apiKeyManager.saveApiKey(apiKey);
+      apiKeyInput.value = '••••••••••••••••';
+    } catch (error) {
+      showNotification('API কী সেভ করতে সমস্যা: ' + error.message, 'error');
+      return;
+    }
+  }
+  
+  showLoading('API কী টেস্ট করা হচ্ছে...');
+  
+  try {
+    const testResult = await translateWithGemini('سلام', true);
+    
+    if (testResult && !testResult.includes('API_ERROR')) {
+      showNotification('✅ API কী সঠিক! আপনি এখন অনুবাদ করতে পারেন।', 'success');
+      updateApiStatus('success', '✅ API টি সঠিক! আপনি এখন অনুবাদ করতে পারেন।');
+    } else {
+      throw new Error('API টি বৈধ নয়');
+    }
+  } catch (error) {
+    showNotification('❌ API কী ত্রুটি: ' + error.message, 'error');
+    updateApiStatus('error', '❌ API টি ত্রুটি: ' + error.message);
+  } finally {
+    hideLoading();
+  }
+}
+
+// Update your DOMContentLoaded function
+document.addEventListener('DOMContentLoaded', function () {
+  initializeTheme();
+  
+  // Load API key using new manager
+  if (loadApiKey()) {
+    console.log('API key loaded successfully');
+  }
+  
+  setupEventListeners();
+  loadHistory();
+  
+  // Add clear button event listener
+  const apiKeyInput = document.getElementById('apiKeyInput');
+  if (apiKeyInput) {
+    // Add right-click context menu for clear option
+    apiKeyInput.addEventListener('contextmenu', function(e) {
+      e.preventDefault();
+      if (GEMINI_API_KEY || this.value !== '') {
+        clearApiKey();
+      }
+    });
+  }
+});
 
 // Replace your existing saveApiKey function with the enhanced version
 // Remove the old saveApiKey function and use saveApiKeyEnhanced instead 
