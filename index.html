@@ -1,923 +1,321 @@
-// Global variables
-let extractedText = "";
-let selectedPdfType = "text";
-let tesseractWorker = null;
-let currentFile = null;
-let isSpeaking = false;
-let speechSynthesis = window.speechSynthesis;
-let GEMINI_API_KEY = "";
-let isTranslationRunning = false;
-let currentTranslationProcess = null;
-
-// Gemini API Configuration
-const GEMINI_API_URL = "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent";
-
-// CryptoJS Encryption
-const ENCRYPTION_KEY = 'al-bayan-secure-key-2025-32chars!!';
-
-// Initialize the application
-document.addEventListener("DOMContentLoaded", function () {
-  initializeTheme();
-  loadApiKey();
-  setupEventListeners();
-  loadHistory();
-  initializeEnhancedFeatures();
-});
-
-// ==================== ENHANCED FEATURES ====================
-
-// Enhanced Notification System
-function showNotification(message, type = 'info') {
-  const existingNotifications = document.querySelectorAll('.custom-notification');
-  existingNotifications.forEach(notif => notif.remove());
-
-  const notification = document.createElement('div');
-  notification.className = `custom-notification ${type}`;
-  notification.style.cssText = `
-    position: fixed;
-    top: 20px;
-    right: 20px;
-    padding: 15px 20px;
-    border-radius: 8px;
-    color: white;
-    font-weight: 600;
-    z-index: 10000;
-    box-shadow: 0 4px 12px rgba(0,0,0,0.15);
-    background: ${type === 'error' ? '#dc3545' : 
-                 type === 'success' ? '#28a745' : 
-                 type === 'warning' ? '#ffc107' : '#17a2b8'};
-    ${type === 'warning' ? 'color: black;' : ''}
-    display: flex;
-    align-items: center;
-    gap: 10px;
-    max-width: 400px;
-  `;
-  
-  notification.innerHTML = `
-    <i class="fas fa-${type === 'error' ? 'exclamation-triangle' : 
-                       type === 'success' ? 'check-circle' : 
-                       type === 'warning' ? 'exclamation-circle' : 'info-circle'}"></i>
-    <span>${message}</span>
-    <button onclick="this.parentElement.remove()" style="
-      background: none;
-      border: none;
-      color: inherit;
-      margin-left: 15px;
-      cursor: pointer;
-      font-size: 18px;
-    ">&times;</button>
-  `;
-  
-  document.body.appendChild(notification);
-  
-  setTimeout(() => {
-    if (notification.parentElement) {
-      notification.remove();
-    }
-  }, 5000);
-}
-
-// Encryption Functions
-function encryptWithCryptoJS(apiKey) {
-  try {
-    return CryptoJS.AES.encrypt(apiKey, ENCRYPTION_KEY).toString();
-  } catch (error) {
-    console.error('Encryption error:', error);
-    return null;
-  }
-}
-
-function decryptWithCryptoJS(encryptedKey) {
-  try {
-    const bytes = CryptoJS.AES.decrypt(encryptedKey, ENCRYPTION_KEY);
-    const decrypted = bytes.toString(CryptoJS.enc.Utf8);
-    return decrypted || null;
-  } catch (error) {
-    console.error('Decryption error:', error);
-    return null;
-  }
-}
-
-// Enhanced API Key Management
-class ApiKeyManager {
-  constructor() {
-    this.storageKey = 'encrypted_gemini_key_v2';
-  }
-  
-  saveApiKey(apiKey) {
-    if (!apiKey || apiKey.trim() === '') {
-      throw new Error('API key cannot be empty');
-    }
+<!doctype html>
+<html lang="bn">
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Al Bayan - আরবি থেকে বাংলা অনুবাদ</title>
     
-    apiKey = apiKey.trim().replace(/\s/g, '');
+    <!-- Libraries -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.4.120/pdf.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/tesseract.js@4/dist/tesseract.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/crypto-js/4.1.1/crypto-js.min.js"></script>
     
-    const encryptedKey = encryptWithCryptoJS(apiKey);
-    if (!encryptedKey) {
-      throw new Error('Encryption failed');
-    }
+    <!-- Fonts -->
+    <link href="https://fonts.googleapis.com/css2?family=Hind+Siliguri:wght@300;400;500;600;700&display=swap" rel="stylesheet" />
+    <link href="https://fonts.googleapis.com/css2?family=Amiri:wght@400;700&display=swap" rel="stylesheet" />
     
-    localStorage.setItem(this.storageKey, encryptedKey);
-    GEMINI_API_KEY = apiKey;
+    <!-- Icons -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" />
     
-    const keyHash = this.generateHash(apiKey);
-    localStorage.setItem('api_key_hash', keyHash);
+    <!-- Styles -->
+    <link rel="stylesheet" href="app.css" />
     
-    return true;
-  }
-  
-  loadApiKey() {
-    try {
-      const encryptedKey = localStorage.getItem(this.storageKey);
-      if (!encryptedKey) return false;
-      
-      const decryptedKey = decryptWithCryptoJS(encryptedKey);
-      if (!decryptedKey) {
-        this.clearApiKey();
-        return false;
-      }
-      
-      const storedHash = localStorage.getItem('api_key_hash');
-      const currentHash = this.generateHash(decryptedKey);
-      
-      if (storedHash !== currentHash) {
-        console.warn('API key verification failed');
-        this.clearApiKey();
-        return false;
-      }
-      
-      GEMINI_API_KEY = decryptedKey;
-      return true;
-      
-    } catch (error) {
-      console.error('Error loading API key:', error);
-      return false;
-    }
-  }
-  
-  clearApiKey() {
-    localStorage.removeItem(this.storageKey);
-    localStorage.removeItem('api_key_hash');
-    GEMINI_API_KEY = '';
-  }
-  
-  generateHash(text) {
-    let hash = 0;
-    for (let i = 0; i < text.length; i++) {
-      const char = text.charCodeAt(i);
-      hash = ((hash << 5) - hash) + char;
-      hash = hash & hash;
-    }
-    return hash.toString();
-  }
-  
-  hasApiKey() {
-    return !!localStorage.getItem(this.storageKey);
-  }
-}
-
-const apiKeyManager = new ApiKeyManager();
-
-// API Key Functions
-function saveApiKey() {
-  const apiKeyInput = document.getElementById('apiKeyInput');
-  let apiKey = apiKeyInput.value.trim();
-  
-  if (apiKey === '••••••••••••••••') {
-    showNotification('API কী ইতিমধ্যে সংরক্ষিত আছে', 'info');
-    return;
-  }
-  
-  if (!apiKey) {
-    showNotification('দয়া করে API কী ইনপুট দিন', 'error');
-    return;
-  }
-  
-  try {
-    apiKeyManager.saveApiKey(apiKey);
-    apiKeyInput.value = '••••••••••••••••';
-    showNotification('✅ API কী সুরক্ষিতভাবে সংরক্ষণ করা হয়েছে!', 'success');
-    updateApiStatus('success', '✅ API টি সংরক্ষণ করা হয়েছে! আপনি এখন অনুবাদ করতে পারেন।');
-  } catch (error) {
-    showNotification('সংরক্ষণ ব্যর্থ: ' + error.message, 'error');
-  }
-}
-
-function loadApiKey() {
-  const success = apiKeyManager.loadApiKey();
-  if (success) {
-    document.getElementById('apiKeyInput').value = '••••••••••••••••';
-    updateApiStatus('success', '✅ API টি লোড হয়েছে! আপনি এখন অনুবাদ করতে পারেন।');
-  }
-  return success;
-}
-
-function clearApiKey() {
-  if (confirm('আপনি কি নিশ্চিত যে API কী ডিলিট করতে চান?')) {
-    apiKeyManager.clearApiKey();
-    document.getElementById('apiKeyInput').value = '';
-    updateApiStatus('warning', '🔑 API কী প্রয়োজন। নিচে আপনার API কী দিন।');
-    showNotification('API কী ডিলিট করা হয়েছে', 'info');
-  }
-}
-
-function showApiKey() {
-  const apiKeyInput = document.getElementById('apiKeyInput');
-  
-  if (apiKeyInput.type === 'password' && GEMINI_API_KEY) {
-    apiKeyInput.type = 'text';
-    apiKeyInput.value = GEMINI_API_KEY;
-    
-    setTimeout(() => {
-      apiKeyInput.type = 'password';
-      apiKeyInput.value = '••••••••••••••••';
-    }, 5000);
-  }
-}
-
-// Enhanced test API function
-async function testApiKey() {
-  const apiKeyInput = document.getElementById('apiKeyInput');
-  let apiKey = apiKeyInput.value.trim();
-  
-  if (apiKey === '••••••••••••••••') {
-    if (!GEMINI_API_KEY) {
-      showNotification('দয়া করে প্রথমে একটি API কী সেভ করুন', 'error');
-      return;
-    }
-    apiKey = GEMINI_API_KEY;
-  } else {
-    try {
-      apiKeyManager.saveApiKey(apiKey);
-      apiKeyInput.value = '••••••••••••••••';
-    } catch (error) {
-      showNotification('API কী সেভ করতে সমস্যা: ' + error.message, 'error');
-      return;
-    }
-  }
-  
-  showLoading('API কী টেস্ট করা হচ্ছে...');
-  
-  try {
-    const testResult = await translateWithGemini('سلام', true);
-    
-    if (testResult && !testResult.includes('API_ERROR')) {
-      showNotification('✅ API কী সঠিক! আপনি এখন অনুবাদ করতে পারেন।', 'success');
-      updateApiStatus('success', '✅ API টি সঠিক! আপনি এখন অনুবাদ করতে পারেন।');
-    } else {
-      throw new Error('API টি বৈধ নয়');
-    }
-  } catch (error) {
-    showNotification('❌ API কী ত্রুটি: ' + error.message, 'error');
-    updateApiStatus('error', '❌ API টি ত্রুটি: ' + error.message);
-  } finally {
-    hideLoading();
-  }
-}
-
-// Drag and Drop Functionality
-function setupDragAndDrop() {
-  const dropArea = document.getElementById('fileUploadArea');
-  
-  if (!dropArea) return;
-  
-  ['dragenter', 'dragover', 'dragleave', 'drop'].forEach(eventName => {
-    dropArea.addEventListener(eventName, preventDefaults, false);
-    document.body.addEventListener(eventName, preventDefaults, false);
-  });
-  
-  function preventDefaults(e) {
-    e.preventDefault();
-    e.stopPropagation();
-  }
-  
-  ['dragenter', 'dragover'].forEach(eventName => {
-    dropArea.addEventListener(eventName, highlight, false);
-  });
-  
-  ['dragleave', 'drop'].forEach(eventName => {
-    dropArea.addEventListener(eventName, unhighlight, false);
-  });
-  
-  function highlight() {
-    dropArea.classList.add('drag-over');
-  }
-  
-  function unhighlight() {
-    dropArea.classList.remove('drag-over');
-  }
-  
-  dropArea.addEventListener('drop', handleDrop, false);
-  
-  function handleDrop(e) {
-    const dt = e.dataTransfer;
-    const files = dt.files;
-    
-    if (files.length > 0) {
-      const file = files[0];
-      
-      if (file.type === 'application/pdf') {
-        currentFile = file;
-        displayFileInfo(file);
-        showNotification('PDF ফাইল সফলভাবে আপলোড হয়েছে!', 'success');
-      } else {
-        showNotification('শুধুমাত্র PDF ফাইল আপলোড করুন।', 'error');
-      }
-    }
-  }
-}
-
-// Keyboard Shortcuts
-function setupKeyboardShortcuts() {
-  document.addEventListener('keydown', function(e) {
-    if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') {
-      e.preventDefault();
-      if (!document.getElementById('extractTranslateBtn').disabled) {
-        extractAndTranslate();
-      }
-    }
-    
-    if (e.key === 'Escape') {
-      stopTranslation();
-    }
-    
-    if ((e.ctrlKey || e.metaKey) && e.key === 's') {
-      e.preventDefault();
-      saveCurrentTranslation();
-    }
-  });
-}
-
-// Save Current Translation to History
-function saveCurrentTranslation() {
-  const arabicText = document.getElementById('arabicText').value;
-  const banglaText = document.getElementById('banglaText').value;
-  
-  if (!arabicText && !banglaText) {
-    showNotification('সংরক্ষণের জন্য কোনো টেক্সট নেই', 'warning');
-    return;
-  }
-  
-  saveToHistory();
-  showNotification('অনুবাদ ইতিহাসে সংরক্ষণ করা হয়েছে!', 'success');
-}
-
-// Initialize all enhanced features
-function initializeEnhancedFeatures() {
-  setupDragAndDrop();
-  setupKeyboardShortcuts();
-  console.log('Enhanced features initialized');
-}
-
-// ==================== ORIGINAL APP FUNCTIONALITY ====================
-
-// Theme functionality
-function initializeTheme() {
-  const themeToggle = document.getElementById('themeToggle');
-  const savedTheme = localStorage.getItem("theme") || "dark";
-
-  if (savedTheme === "dark") {
-    document.documentElement.setAttribute("data-theme", "dark");
-    themeToggle.checked = true;
-  }
-
-  themeToggle.addEventListener("change", function () {
-    if (this.checked) {
-      document.documentElement.setAttribute("data-theme", "dark");
-      localStorage.setItem("theme", "dark");
-    } else {
-      document.documentElement.setAttribute("data-theme", "light");
-      localStorage.setItem("theme", "light");
-    }
-  });
-}
-
-// Event listeners
-function setupEventListeners() {
-  document.getElementById('pdfFile').addEventListener('change', function (e) {
-    const file = e.target.files[0];
-    if (!file) return;
-    currentFile = file;
-    displayFileInfo(file);
-  });
-}
-
-// Update API Status
-function updateApiStatus(type, message) {
-  const statusDiv = document.getElementById("apiStatus");
-  statusDiv.className = `api-status ${type}`;
-  statusDiv.innerHTML = message;
-}
-
-// Display file information
-function displayFileInfo(file) {
-  const fileInfo = document.getElementById("fileInfo");
-  const fileName = document.getElementById("fileName");
-  const fileSize = document.getElementById("fileSize");
-
-  const fileSizeMB = (file.size / (1024 * 1024)).toFixed(2);
-
-  fileName.textContent = file.name;
-  fileSize.textContent = `আকার: ${fileSizeMB} MB`;
-  fileInfo.style.display = "block";
-
-  if (file.size > 10 * 1024 * 1024) {
-    showNotification(`বড় ফাইল (${fileSizeMB} MB): প্রসেসিং বেশি সময় নিতে পারে।`, 'warning');
-  }
-}
-
-// PDF type selection
-function selectPdfType(type) {
-  selectedPdfType = type;
-  document.querySelectorAll(".pdf-type-option").forEach((opt) => {
-    opt.classList.remove("active");
-  });
-  event.currentTarget.classList.add("active");
-}
-
-// Stop translation function
-function stopTranslation() {
-  if (isTranslationRunning) {
-    isTranslationRunning = false;
-    document.getElementById("stopBtn").style.display = "none";
-    document.getElementById("extractTranslateBtn").disabled = false;
-    hideLoading();
-    document.getElementById("progressContainer").style.display = "none";
-    showNotification("অনুবাদ বন্ধ করা হয়েছে!", 'info');
-
-    if (tesseractWorker) {
-      tesseractWorker.terminate();
-      tesseractWorker = null;
-    }
-  }
-}
-
-// Main translation function
-async function extractAndTranslate() {
-  if (!currentFile) {
-    showNotification("দয়া করে প্রথমে একটি PDF ফাইল সিলেক্ট করুন।", 'error');
-    return;
-  }
-
-  if (!GEMINI_API_KEY) {
-    showNotification("দয়া করে প্রথমে একটি বৈধ জিমিনি API কী সেট করুন।", 'error');
-    document.getElementById("apiKeyInput").focus();
-    return;
-  }
-
-  if (currentFile.size > 20 * 1024 * 1024) {
-    showNotification("ফাইল খুব বড়! দয়া করে ২০ এমবি-এর ছোট ফাইল আপলোড করুন।", 'error');
-    return;
-  }
-
-  const extractTranslateBtn = document.getElementById("extractTranslateBtn");
-  extractTranslateBtn.disabled = true;
-  document.getElementById("stopBtn").style.display = "inline-flex";
-  isTranslationRunning = true;
-
-  try {
-    showLoading("PDF প্রসেস করা হচ্ছে...");
-
-    if (selectedPdfType === "ocr") {
-      await extractWithOCRAndTranslate(currentFile);
-    } else {
-      await extractNormalAndTranslate(currentFile);
-    }
-
-    if (isTranslationRunning) {
-      saveToHistory();
-    }
-  } catch (error) {
-    if (isTranslationRunning) {
-      console.error("Translation error:", error);
-      showNotification("ত্রুটি: " + (error.message || "অনুবাদ করতে সমস্যা হয়েছে"), 'error');
-    }
-  } finally {
-    if (isTranslationRunning) {
-      extractTranslateBtn.disabled = false;
-      document.getElementById("stopBtn").style.display = "none";
-      hideLoading();
-      isTranslationRunning = false;
-    }
-  }
-}
-
-// Normal PDF extraction with translation
-async function extractNormalAndTranslate(file) {
-  try {
-    const pdf = await pdfjsLib.getDocument(await file.arrayBuffer()).promise;
-    const totalPages = Math.min(pdf.numPages, 20);
-    let arabicText = "";
-    let banglaTranslation = "";
-
-    document.getElementById("progressContainer").style.display = "block";
-
-    for (let i = 1; i <= totalPages; i++) {
-      if (!isTranslationRunning) {
-        console.log("Translation stopped by user");
-        return;
-      }
-
-      showLoading(`পৃষ্ঠা ${i}/${totalPages} প্রসেস করা হচ্ছে...`);
-
-      const page = await pdf.getPage(i);
-      const content = await page.getTextContent();
-      const pageText = content.items.map((item) => item.str).join(" ");
-
-      if (pageText.trim().length > 0) {
-        arabicText += `পৃষ্ঠা ${i}:\n${pageText}\n\n`;
-        document.getElementById("arabicText").value = arabicText;
-
-        const translatedText = await translateWithGemini(pageText);
-        banglaTranslation += `পৃষ্ঠা ${i}:\n${translatedText}\n\n`;
-        document.getElementById("banglaText").value = banglaTranslation;
-      }
-
-      const progress = Math.round((i / totalPages) * 100);
-      updateProgress(progress);
-
-      await delay(2000);
-    }
-
-    if (isTranslationRunning) {
-      extractedText = arabicText;
-      document.getElementById("progressContainer").style.display = "none";
-      showNotification(`${totalPages} পৃষ্ঠা সফলভাবে অনুবাদ করা হয়েছে!`, 'success');
-    }
-  } catch (error) {
-    if (isTranslationRunning) {
-      throw new Error("PDF পড়তে সমস্যা: " + error.message);
-    }
-  }
-}
-
-// OCR extraction with translation
-async function extractWithOCRAndTranslate(file) {
-  showLoading("OCR প্রস্তুত করা হচ্ছে...");
-
-  try {
-    if (!tesseractWorker) {
-      tesseractWorker = await Tesseract.createWorker("ara");
-    }
-
-    const pdf = await pdfjsLib.getDocument(await file.arrayBuffer()).promise;
-    const totalPages = Math.min(pdf.numPages, 10);
-    let arabicText = "";
-    let banglaTranslation = "";
-
-    document.getElementById("progressContainer").style.display = "block";
-
-    for (let i = 1; i <= totalPages; i++) {
-      if (!isTranslationRunning) {
-        console.log("Translation stopped by user");
-        if (tesseractWorker) {
-          tesseractWorker.terminate();
-          tesseractWorker = null;
-        }
-        return;
-      }
-
-      showLoading(`পৃষ্ঠা ${i}/${totalPages} OCR করা হচ্ছে...`);
-
-      const page = await pdf.getPage(i);
-      const viewport = page.getViewport({ scale: 1.5 });
-
-      const canvas = document.createElement("canvas");
-      const context = canvas.getContext("2d");
-      canvas.height = viewport.height;
-      canvas.width = viewport.width;
-
-      await page.render({
-        canvasContext: context,
-        viewport: viewport,
-      }).promise;
-
-      const { data: { text } } = await tesseractWorker.recognize(canvas);
-
-      if (text.trim().length > 0) {
-        arabicText += `পৃষ্ঠা ${i}:\n${text}\n\n`;
-        document.getElementById("arabicText").value = arabicText;
-
-        const translatedText = await translateWithGemini(text);
-        banglaTranslation += `পৃষ্ঠা ${i}:\n${translatedText}\n\n`;
-        document.getElementById("banglaText").value = banglaTranslation;
-      }
-
-      const progress = Math.round((i / totalPages) * 100);
-      updateProgress(progress);
-
-      await delay(2500);
-    }
-
-    if (isTranslationRunning) {
-      extractedText = arabicText;
-      document.getElementById("progressContainer").style.display = "none";
-      showNotification(`${totalPages} পৃষ্ঠা OCR এবং অনুবাদ সম্পূর্ণ!`, 'success');
-    }
-  } catch (error) {
-    if (isTranslationRunning) {
-      throw new Error("OCR ত্রুটি: " + error.message);
-    }
-  }
-}
-
-// Real Gemini API translation
-async function translateWithGemini(text, isTest = false) {
-  if (!GEMINI_API_KEY) {
-    throw new Error("API_KEY_MISSING");
-  }
-
-  if (!isTranslationRunning) {
-    return "অনুবাদ বন্ধ করা হয়েছে";
-  }
-
-  try {
-    const apiUrl = `${GEMINI_API_URL}?key=${GEMINI_API_KEY}`;
-
-    const requestBody = {
-      contents: [
-        {
-          parts: [
-            {
-              text: `Translate this Arabic Islamic text to natural Bangla accurately. Preserve religious meaning and Islamic terminology. Keep the translation concise and natural. Only return the translation without any additional text.
-
-Arabic Text: ${text.substring(0, 3000)}`
-            }
-          ]
-        }
-      ],
-      generationConfig: {
-        temperature: 0.3,
-        topK: 40,
-        topP: 0.8,
-        maxOutputTokens: 2000,
-      },
-    };
-
-    const response = await fetch(apiUrl, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify(requestBody),
-    });
-
-    if (!response.ok) {
-      const errorData = await response.json();
-      
-      if (response.status === 429) {
-        throw new Error('API_QUOTA_EXCEEDED');
-      } else if (response.status === 401) {
-        throw new Error('INVALID_API_KEY');
-      } else {
-        throw new Error(errorData.error?.message || `API Error: ${response.status}`);
-      }
-    }
-
-    const data = await response.json();
-    const translatedText = data.candidates[0].content.parts[0].text;
-
-    if (isTest) {
-      return "API_TEST_SUCCESS";
-    }
-
-    return translatedText;
-  } catch (error) {
-    console.error("Gemini API error:", error);
-    
-    const errorMessages = {
-      'API_KEY_MISSING': 'API কী পাওয়া যায়নি। দয়া করে API কী সেট করুন।',
-      'API_QUOTA_EXCEEDED': 'API লিমিট শেষ হয়েছে। পরে চেষ্টা করুন।',
-      'INVALID_API_KEY': 'API কী ভুল। দয়া করে সঠিক API কী দিন।',
-      'NETWORK_ERROR': 'নেটওয়ার্ক সমস্যা। ইন্টারনেট সংযোগ চেক করুন।'
-    };
-    
-    const userMessage = errorMessages[error.message] || `অনুবাদ ব্যর্থ: ${error.message}`;
-    
-    showNotification(userMessage, 'error');
-    throw error;
-  }
-}
-
-// Utility functions
-function delay(ms) {
-  return new Promise((resolve) => setTimeout(resolve, ms));
-}
-
-function showLoading(message) {
-  document.getElementById("loading").style.display = "block";
-  document.getElementById("loadingText").textContent = message;
-}
-
-function hideLoading() {
-  document.getElementById("loading").style.display = "none";
-}
-
-function updateProgress(percent) {
-  document.getElementById("progressBar").style.width = percent + "%";
-  document.getElementById("progressBar").textContent = percent + "%";
-}
-
-// Tab navigation
-function showTab(tabName) {
-  document.querySelectorAll(".main-card").forEach((tab) => {
-    tab.classList.add("hidden");
-  });
-
-  document.querySelectorAll(".nav-tab").forEach((tab) => {
-    tab.classList.remove("active");
-  });
-
-  document.getElementById(tabName + "-tab").classList.remove("hidden");
-  event.currentTarget.classList.add("active");
-}
-
-// Reader functionality
-function openReader(type) {
-  const modal = document.getElementById("readerModal");
-  const title = document.getElementById("readerTitle");
-  const body = document.getElementById("readerBody");
-
-  let content = "";
-  if (type === "arabic") {
-    title.textContent = "আরবি টেক্সট";
-    content = document.getElementById("arabicText").value || "কোনো টেক্সট নেই";
-    body.innerHTML = `<div class="arabic-text" style="font-size: 24px; line-height: 3;">${content}</div>`;
-  } else {
-    title.textContent = "বাংলা অনুবাদ";
-    content = document.getElementById("banglaText").value || "কোনো অনুবাদ নেই";
-    body.innerHTML = `<div class="bangla-text" style="font-size: 20px; line-height: 2;">${content}</div>`;
-  }
-
-  modal.style.display = "block";
-  stopSpeech();
-}
-
-function closeReader() {
-  stopSpeech();
-  document.getElementById("readerModal").style.display = "none";
-}
-
-function changeFontSize(delta) {
-  const body = document.getElementById("readerBody");
-  const currentSize = parseInt(window.getComputedStyle(body.querySelector("div")).fontSize);
-  const newSize = Math.max(12, Math.min(40, currentSize + delta));
-  body.querySelector("div").style.fontSize = newSize + "px";
-}
-
-function toggleDarkReader() {
-  const body = document.getElementById("readerBody");
-  const isDark = body.style.backgroundColor === "rgb(26, 32, 44)";
-
-  if (isDark) {
-    body.style.backgroundColor = "";
-    body.style.color = "";
-  } else {
-    body.style.backgroundColor = "#1A202C";
-    body.style.color = "#CBD5E0";
-  }
-}
-
-// Text-to-speech with toggle functionality
-function toggleSpeakText() {
-  if (isSpeaking) {
-    stopSpeech();
-  } else {
-    speakText();
-  }
-}
-
-function speakText() {
-  const text = document.getElementById("readerBody").textContent;
-  if (!text || text === "কোনো অনুবাদ নেই" || text === "কোনো টেক্সট নেই") {
-    showNotification("পড়ার জন্য কোনো টেক্সট নেই।", 'warning');
-    return;
-  }
-
-  if ("speechSynthesis" in window) {
-    stopSpeech();
-
-    const utterance = new SpeechSynthesisUtterance(text);
-    utterance.lang = "bn-BD";
-    utterance.rate = 0.8;
-    utterance.pitch = 1;
-
-    isSpeaking = true;
-    const ttsButton = document.getElementById("ttsButton");
-    ttsButton.innerHTML = '<i class="fas fa-stop"></i> থামুন';
-    ttsButton.classList.add("tts-active");
-
-    utterance.onend = function () {
-      stopSpeech();
-    };
-
-    utterance.onerror = function () {
-      stopSpeech();
-      showNotification("Text-to-speech ত্রুটি হয়েছে।", 'error');
-    };
-
-    speechSynthesis.speak(utterance);
-  } else {
-    showNotification("Text-to-speech is not supported in your browser.", 'error');
-  }
-}
-
-function stopSpeech() {
-  if ("speechSynthesis" in window) {
-    speechSynthesis.cancel();
-  }
-  isSpeaking = false;
-  const ttsButton = document.getElementById("ttsButton");
-  ttsButton.innerHTML = '<i class="fas fa-volume-up"></i> পড়ুন';
-  ttsButton.classList.remove("tts-active");
-}
-
-// History functionality
-function saveToHistory() {
-  const history = JSON.parse(localStorage.getItem("translationHistory") || "[]");
-  const newItem = {
-    id: Date.now(),
-    title: currentFile?.name || "অনুবাদ",
-    arabicText: document.getElementById("arabicText").value.substring(0, 200) + "...",
-    banglaText: document.getElementById("banglaText").value.substring(0, 200) + "...",
-    date: new Date().toLocaleDateString("bn-BD"),
-  };
-
-  history.unshift(newItem);
-  localStorage.setItem("translationHistory", JSON.stringify(history));
-  loadHistory();
-}
-
-function loadHistory() {
-  const history = JSON.parse(localStorage.getItem("translationHistory") || "[]");
-  const historyGrid = document.getElementById("historyGrid");
-
-  if (history.length === 0) {
-    historyGrid.innerHTML = `
-      <div class="empty-history">
-        <i class="fas fa-inbox"></i>
-        <p>কোনো অনুবাদ ইতিহাস নেই</p>
-        <p class="empty-history-sub">আপনার প্রথম অনুবাদ শুরু করুন!</p>
-      </div>
-    `;
-    return;
-  }
-
-  historyGrid.innerHTML = history.map((item) => `
-    <div class="history-card" onclick="loadHistoryItem(${item.id})">
-      <div class="history-card-header">
-        <div class="history-title">${item.title}</div>
-        <div class="history-date">${item.date}</div>
-      </div>
-      <div class="history-preview">${item.banglaText}</div>
+    <style>
+        /* Temporary inline styles to ensure basic functionality */
+        .hidden { display: none !important; }
+        .api-status { padding: 10px; margin: 10px 0; border-radius: 5px; }
+        .api-status.warning { background: #fff3cd; color: #856404; border-left: 4px solid #ffc107; }
+        .api-status.success { background: #d4edda; color: #155724; border-left: 4px solid #28a745; }
+        .api-status.error { background: #f8d7da; color: #721c24; border-left: 4px solid #dc3545; }
+        
+        .main-card { background: white; padding: 20px; border-radius: 10px; margin: 20px 0; box-shadow: 0 2px 10px rgba(0,0,0,0.1); }
+        
+        [data-theme="dark"] .main-card { background: #2d3748; color: #f7fafc; }
+        
+        .btn { background: #3E8999; color: white; border: none; padding: 10px 20px; border-radius: 5px; cursor: pointer; margin: 5px; }
+        .btn:hover { background: #2d6b7a; }
+        .btn-secondary { background: #6c757d; }
+        .btn-danger { background: #dc3545; }
+        .btn-gold { background: #d4af37; }
+        
+        .file-upload-container { border: 2px dashed #3E8999; padding: 40px; text-align: center; border-radius: 10px; margin: 20px 0; }
+        
+        .text-preview-container { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; margin: 20px 0; }
+        @media (max-width: 768px) { .text-preview-container { grid-template-columns: 1fr; } }
+        
+        .text-content { width: 100%; height: 300px; padding: 10px; border: 1px solid #ddd; border-radius: 5px; font-family: 'Hind Siliguri'; }
+        
+        .arabic-text { font-family: 'Amiri'; text-align: right; direction: rtl; font-size: 18px; }
+        .bangla-text { font-family: 'Hind Siliguri'; font-size: 16px; }
+        
+        .progress-container { width: 100%; background: #e2e8f0; border-radius: 5px; margin: 10px 0; }
+        .progress-bar { height: 20px; background: #3E8999; border-radius: 5px; text-align: center; color: white; }
+        
+        .loading { text-align: center; padding: 20px; }
+        .spinner { border: 4px solid #f3f3f3; border-top: 4px solid #3E8999; border-radius: 50%; width: 40px; height: 40px; animation: spin 1s linear infinite; margin: 0 auto 10px; }
+        @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
+        
+        .reader-modal { display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.8); z-index: 1000; }
+        .reader-content { position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); background: white; padding: 20px; border-radius: 10px; width: 90%; max-width: 800px; }
+        
+        .nav-tabs { display: flex; background: #f8f9fa; border-radius: 5px; margin: 10px 0; }
+        .nav-tab { flex: 1; padding: 15px; text-align: center; cursor: pointer; }
+        .nav-tab.active { background: #3E8999; color: white; }
+        
+        .history-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 15px; }
+        .history-card { background: #f8f9fa; padding: 15px; border-radius: 5px; cursor: pointer; }
+        
+        .header { background: #3E8999; color: white; padding: 30px; border-radius: 10px; text-align: center; margin-bottom: 20px; }
+        .footer { text-align: center; padding: 20px; margin-top: 40px; color: #666; border-top: 1px solid #ddd; }
+        
+        [data-theme="dark"] { background: #1a202c; color: #f7fafc; }
+        [data-theme="dark"] .file-upload-container { border-color: #4a5568; }
+        [data-theme="dark"] .text-content { background: #2d3748; border-color: #4a5568; color: #f7fafc; }
+        [data-theme="dark"] .history-card { background: #2d3748; }
+    </style>
+</head>
+
+<body>
+    <div class="container">
+        <!-- Header -->
+        <header class="header">
+            <div class="theme-toggle" style="position: absolute; top: 20px; right: 20px;">
+                <label class="switch">
+                    <input type="checkbox" id="themeToggle" />
+                    <span class="slider"></span>
+                </label>
+            </div>
+            <div class="logo-container">
+                <div class="logo" style="font-size: 3rem; margin-bottom: 10px;">لَا إِلٰهَ إِلَّا الله</div>
+                <h1 class="title" style="margin: 0; font-size: 2.5rem;">Al Bayan</h1>
+                <p class="subtitle" style="margin-top: 10px; opacity: 0.9;">আরবি থেকে বাংলা ইসলামিক বই অনুবাদ</p>
+            </div>
+        </header>
+
+        <!-- Navigation Tabs -->
+        <div class="nav-tabs">
+            <div class="nav-tab active" onclick="showTab('translate')">
+                <i class="fas fa-translate"></i> অনুবাদ করুন
+            </div>
+            <div class="nav-tab" onclick="showTab('history')">
+                <i class="fas fa-history"></i> ইতিহাস
+            </div>
+            <div class="nav-tab" onclick="showTab('library')">
+                <i class="fas fa-book"></i> লাইব্রেরি
+            </div>
+        </div>
+
+        <!-- Translation Tab -->
+        <div id="translate-tab" class="main-card">
+            <!-- API Status -->
+            <div id="apiStatus" class="api-status warning">
+                <i class="fas fa-exclamation-triangle"></i> জিমিনি API টি প্রয়োজন। নিচে আপনার API টি দিন।
+            </div>
+
+            <!-- API Key Input -->
+            <div style="background: #f8f9fa; padding: 20px; border-radius: 8px; margin: 20px 0; border-left: 4px solid #3E8999;">
+                <div style="display: flex; gap: 10px; align-items: center; flex-wrap: wrap;">
+                    <div style="position: relative; flex: 1;">
+                        <input
+                            type="password"
+                            id="apiKeyInput"
+                            placeholder="এখানে আপনার জিমিনি API টি দিন"
+                            style="width: 100%; padding: 12px 40px 12px 15px; border: 1px solid #ddd; border-radius: 5px; font-family: 'Hind Siliguri';"
+                        />
+                        <button 
+                            onclick="showApiKey()" 
+                            style="position: absolute; right: 35px; top: 50%; transform: translateY(-50%); background: none; border: none; color: #666; cursor: pointer; padding: 5px;"
+                            title="API কী দেখুন"
+                        >
+                            <i class="fas fa-eye"></i>
+                        </button>
+                        <button 
+                            onclick="clearApiKey()" 
+                            style="position: absolute; right: 10px; top: 50%; transform: translateY(-50%); background: none; border: none; color: #666; cursor: pointer; padding: 5px;"
+                            title="API কী মুছুন"
+                        >
+                            <i class="fas fa-times"></i>
+                        </button>
+                    </div>
+                    <button class="btn" onclick="saveApiKey()">
+                        <i class="fas fa-save"></i> সংরক্ষণ করুন
+                    </button>
+                    <button class="btn btn-secondary" onclick="testApiKey()">
+                        <i class="fas fa-vial"></i> টেস্ট করুন
+                    </button>
+                </div>
+                <p style="margin-top: 10px; font-size: 0.9rem; color: #666;">
+                    🔑 API পাবেন:
+                    <a href="https://aistudio.google.com/app/apikey" target="_blank" style="color: #3E8999;">Google AI Studio</a>
+                    থেকে
+                </p>
+            </div>
+
+            <!-- File Upload -->
+            <div class="file-upload-container" id="fileUploadArea">
+                <div style="font-size: 4rem; color: #3E8999; margin-bottom: 20px;">
+                    <i class="fas fa-file-pdf"></i>
+                </div>
+                <h3 style="margin: 0 0 10px 0;">PDF ফাইল আপলোড করুন</h3>
+                <p style="color: #666; margin-bottom: 30px;">আরবি বইয়ের PDF সিলেক্ট করুন (সর্বোচ্চ ২০ এমবি)</p>
+                <input type="file" id="pdfFile" accept=".pdf" hidden />
+                <button class="btn btn-gold" onclick="document.getElementById('pdfFile').click()">
+                    <i class="fas fa-upload"></i> PDF সিলেক্ট করুন
+                </button>
+                <p style="margin-top: 15px; font-size: 0.9rem; color: #666; font-style: italic;">
+                    অথবা PDF ফাইলটি এখানে ড্রাগ এন্ড ড্রপ করুন
+                </p>
+            </div>
+
+            <!-- File Info -->
+            <div id="fileInfo" style="display: none; background: #f8f9fa; padding: 15px; border-radius: 5px; margin: 15px 0; border-left: 4px solid #3E8999;">
+                <div id="fileName" style="font-weight: bold; color: #3E8999;"></div>
+                <div id="fileSize" style="color: #666; font-size: 0.9rem;"></div>
+            </div>
+
+            <!-- PDF Type Selection -->
+            <div style="background: #fff3cd; padding: 20px; border-radius: 8px; margin: 20px 0; text-align: center; border-left: 4px solid #ffc107;">
+                <strong>📄 PDF টাইপ সিলেক্ট করুন:</strong>
+                <div style="display: flex; justify-content: center; gap: 20px; margin-top: 15px; flex-wrap: wrap;">
+                    <div class="pdf-type-option active" data-type="text" onclick="selectPdfType('text')"
+                         style="padding: 10px 20px; background: white; border-radius: 5px; cursor: pointer; border: 2px solid #3E8999;">
+                        <i class="fas fa-font"></i> সাধারণ PDF (টেক্সট)
+                    </div>
+                    <div class="pdf-type-option" data-type="ocr" onclick="selectPdfType('ocr')"
+                         style="padding: 10px 20px; background: white; border-radius: 5px; cursor: pointer; border: 2px solid transparent;">
+                        <i class="fas fa-camera"></i> স্ক্যান করা PDF (OCR)
+                    </div>
+                </div>
+            </div>
+
+            <!-- Action Buttons -->
+            <div style="text-align: center; margin: 30px 0;">
+                <button class="btn" onclick="extractAndTranslate()" id="extractTranslateBtn">
+                    <i class="fas fa-bolt"></i> অনুবাদ শুরু করুন
+                </button>
+                <button class="btn btn-danger" onclick="stopTranslation()" id="stopBtn" style="display: none;">
+                    <i class="fas fa-stop"></i> অনুবাদ বন্ধ করুন
+                </button>
+                <button class="btn btn-secondary" onclick="clearAll()">
+                    <i class="fas fa-redo"></i> রিসেট করুন
+                </button>
+            </div>
+
+            <!-- Progress Bar -->
+            <div class="progress-container" id="progressContainer" style="display: none">
+                <div class="progress-bar" id="progressBar" style="width: 0%">0%</div>
+            </div>
+
+            <!-- Loading -->
+            <div class="loading" id="loading" style="display: none">
+                <div class="spinner"></div>
+                <p id="loadingText">অনুবাদ করা হচ্ছে... অনুগ্রহ করে অপেক্ষা করুন</p>
+            </div>
+
+            <!-- Text Preview -->
+            <div class="text-preview-container">
+                <div style="border: 1px solid #ddd; border-radius: 8px; padding: 15px;">
+                    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 15px;">
+                        <h3 style="margin: 0;"><i class="fas fa-language"></i> আরবি টেক্সট</h3>
+                        <button class="btn" onclick="openReader('arabic')" style="padding: 5px 10px; font-size: 0.9rem;">
+                            <i class="fas fa-expand"></i> বড় করে পড়ুন
+                        </button>
+                    </div>
+                    <textarea class="text-content arabic-text" id="arabicText" placeholder="এখানে আরবি টেক্সট দেখানো হবে..." readonly></textarea>
+                </div>
+                
+                <div style="border: 1px solid #ddd; border-radius: 8px; padding: 15px;">
+                    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 15px;">
+                        <h3 style="margin: 0;"><i class="fas fa-translate"></i> বাংলা অনুবাদ</h3>
+                        <button class="btn" onclick="openReader('bangla')" style="padding: 5px 10px; font-size: 0.9rem;">
+                            <i class="fas fa-expand"></i> বড় করে পড়ুন
+                        </button>
+                    </div>
+                    <textarea class="text-content bangla-text" id="banglaText" placeholder="এখানে বাংলা অনুবাদ দেখানো হবে..." readonly></textarea>
+                </div>
+            </div>
+
+            <!-- Keyboard Shortcuts -->
+            <div style="background: #f8f9fa; padding: 15px; border-radius: 5px; margin-top: 20px; border-left: 4px solid #d4af37;">
+                <p style="margin: 0 0 10px 0;"><strong>কীবোর্ড শর্টকাট:</strong></p>
+                <ul style="margin: 0; padding-left: 20px;">
+                    <li><kbd>Ctrl + Enter</kbd> - অনুবাদ শুরু করুন</li>
+                    <li><kbd>Escape</kbd> - অনুবাদ বন্ধ করুন</li>
+                    <li><kbd>Ctrl + S</kbd> - ইতিহাসে সংরক্ষণ করুন</li>
+                </ul>
+            </div>
+        </div>
+
+        <!-- History Tab -->
+        <div id="history-tab" class="main-card hidden">
+            <h2 style="text-align: center; margin-bottom: 20px;">
+                <i class="fas fa-history"></i> আপনার অনুবাদ ইতিহাস
+            </h2>
+            <div style="text-align: center; margin-bottom: 20px;">
+                <button class="btn btn-secondary" onclick="clearAllHistory()">
+                    <i class="fas fa-trash"></i> সব ইতিহাস মুছুন
+                </button>
+            </div>
+            <div class="history-grid" id="historyGrid">
+                <div style="text-align: center; color: #666; padding: 40px;">
+                    <i class="fas fa-inbox" style="font-size: 3rem; margin-bottom: 20px; opacity: 0.5;"></i>
+                    <p>কোনো অনুবাদ ইতিহাস নেই</p>
+                    <p style="margin-top: 10px; font-size: 0.9rem;">আপনার প্রথম অনুবাদ শুরু করুন!</p>
+                </div>
+            </div>
+        </div>
+
+        <!-- Library Tab -->
+        <div id="library-tab" class="main-card hidden">
+            <h2 style="text-align: center; margin-bottom: 20px;">
+                <i class="fas fa-book"></i> ইসলামিক লাইব্রেরি
+            </h2>
+            <div style="text-align: center; color: #666; margin-bottom: 40px;">
+                <p>শীঘ্রই আসছে... প্রিসেট ইসলামিক বইগুলোর সংগ্রহ</p>
+                <div style="margin-top: 30px; padding: 30px; background: #f8f9fa; border-radius: 5px; border-left: 4px solid #d4af37;">
+                    <i class="fas fa-clock" style="font-size: 3rem; margin-bottom: 15px; color: #d4af37;"></i>
+                    <p>আমরা গুরুত্বপূর্ণ ইসলামিক বইগুলোর বাংলা অনুবাদ প্রস্তুত করছি</p>
+                </div>
+            </div>
+        </div>
     </div>
-  `).join("");
-}
 
-function loadHistoryItem(id) {
-  const history = JSON.parse(localStorage.getItem("translationHistory") || "[]");
-  const item = history.find((h) => h.id === id);
+    <!-- Reader Modal -->
+    <div class="reader-modal" id="readerModal">
+        <div class="reader-content">
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px; padding-bottom: 15px; border-bottom: 1px solid #ddd;">
+                <h3 id="readerTitle" style="margin: 0;">বাংলা অনুবাদ</h3>
+                <button class="btn" onclick="closeReader()" style="background: rgba(0,0,0,0.1);">
+                    <i class="fas fa-times"></i> বন্ধ করুন
+                </button>
+            </div>
+            <div id="readerBody" style="height: 400px; overflow-y: auto; padding: 10px; font-size: 18px; line-height: 1.6;">
+                <!-- Content will be dynamically added -->
+            </div>
+            <div style="display: flex; gap: 10px; justify-content: center; margin-top: 20px; padding-top: 20px; border-top: 1px solid #ddd;">
+                <button class="btn" onclick="changeFontSize(-2)">
+                    <i class="fas fa-font"></i> ছোট
+                </button>
+                <button class="btn" onclick="changeFontSize(2)">
+                    <i class="fas fa-font"></i> বড়
+                </button>
+                <button class="btn" onclick="toggleDarkReader()">
+                    <i class="fas fa-moon"></i> নাইট মোড
+                </button>
+                <button class="btn" id="ttsButton" onclick="toggleSpeakText()">
+                    <i class="fas fa-volume-up"></i> পড়ুন
+                </button>
+            </div>
+        </div>
+    </div>
 
-  if (item) {
-    document.getElementById("arabicText").value = item.arabicText;
-    document.getElementById("banglaText").value = item.banglaText;
-    showTab("translate");
-    showNotification("ইতিহাস থেকে লোড করা হয়েছে!", 'success');
-  }
-}
+    <!-- Footer -->
+    <footer class="footer">
+        <p>© 2025 Al Bayan - আরবি থেকে বাংলা ইসলামিক বই অনুবাদ</p>
+        <p style="margin: 8px 0; font-size: 0.85rem; opacity: 0.8;">অনুবাদ ১০০% সঠিক নাও হতে পারে, তাই ধর্মীয় বিষয়ে সতর্কতা অবলম্বন করুন</p>
+        <p style="margin-top: 10px; font-size: 0.9rem; font-weight: bold; color: #3E8999;">বাকিয়াহ ইনস্টিটিউট</p>
+    </footer>
 
-function clearAllHistory() {
-  if (confirm("আপনি কি সব ইতিহাস মুছতে চান?")) {
-    localStorage.removeItem("translationHistory");
-    loadHistory();
-    showNotification("সব ইতিহাস মুছে ফেলা হয়েছে!", 'success');
-  }
-}
-
-// Clear all function
-function clearAll() {
-  stopTranslation();
-  document.getElementById("pdfFile").value = "";
-  document.getElementById("arabicText").value = "";
-  document.getElementById("banglaText").value = "";
-  document.getElementById("fileInfo").style.display = "none";
-  document.getElementById("progressContainer").style.display = "none";
-  currentFile = null;
-  extractedText = "";
-  stopSpeech();
-  showNotification("সব কিছু রিসেট করা হয়েছে।", 'info');
-}
-
-// Close modal when clicking outside
-window.onclick = function (event) {
-  const modal = document.getElementById("readerModal");
-  if (event.target === modal) {
-    closeReader();
-  }
-};
-
-// Stop speech when page is hidden
-document.addEventListener("visibilitychange", function () {
-  if (document.hidden) {
-    stopSpeech();
-  }
-});
+    <script src="app.js"></script>
+</body>
+</html>
