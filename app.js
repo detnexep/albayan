@@ -538,37 +538,22 @@ async function extractWithOCRAndTranslate(file) {
 }
 
 // Real Gemini API translation
-async function translateWithGemini(text, isTest = false) {
-    if (!GEMINI_API_KEY) {
-        throw new Error("API_KEY_MISSING");
+const requestBody = {
+  contents: [
+    {
+      role: "user",
+      parts: [
+        {
+          text: `Translate this Arabic Islamic text to Bangla. Preserve Islamic meaning accurately. Only return the Bangla translation.\n\n${text.substring(0, 1000)}`
+        }
+      ]
     }
-
-    if (!isTranslationRunning) {
-        return "অনুবাদ বন্ধ করা হয়েছে";
-    }
-
-    try {
-        const apiUrl = `${GEMINI_API_URL}?key=${GEMINI_API_KEY}`;
-
-        const requestBody = {
-            contents: [
-                {
-                    parts: [
-                        {
-                            text: `Translate this Arabic Islamic text to natural Bangla accurately. Preserve religious meaning and Islamic terminology. Keep the translation concise and natural. Only return the translation without any additional text.
-
-Arabic Text: ${text.substring(0, 1000)}`
-                        }
-                    ]
-                }
-            ],
-            generationConfig: {
-                temperature: 0.3,
-                topK: 40,
-                topP: 0.8,
-                maxOutputTokens: 1000,
-            },
-        };
+  ],
+  generationConfig: {
+    temperature: 0.2,
+    maxOutputTokens: 1000
+  }
+};
 
         const response = await fetch(apiUrl, {
             method: "POST",
