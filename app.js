@@ -9,8 +9,7 @@ let GEMINI_API_KEY = "";
 let isTranslationRunning = false;
 
 // Gemini API Configuration
-const GEMINI_API_URL = "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent";
-
+const GEMINI_API_URL = "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash-lite:generateContent";
 // Encryption Key
 const ENCRYPTION_KEY = 'al-bayan-secure-key-2025-32chars!!';
 
