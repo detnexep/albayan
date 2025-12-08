@@ -269,19 +269,19 @@ function saveApiKey() {
     let apiKey = apiKeyInput.value.trim();
     
     if (apiKey === '••••••••••••••••') {
-        showNotification('API কী ইতিমধ্যে সংরক্ষিত আছে', 'info');
+        showNotification('API টি ইতিমধ্যে সংরক্ষিত আছে', 'info');
         return;
     }
     
     if (!apiKey) {
-        showNotification('দয়া করে API কী ইনপুট দিন', 'error');
+        showNotification('দয়া করে API টি ইনপুট দিন', 'error');
         return;
     }
     
     try {
         apiKeyManager.saveApiKey(apiKey);
         apiKeyInput.value = '••••••••••••••••';
-        showNotification('✅ API কী সুরক্ষিতভাবে সংরক্ষণ করা হয়েছে!', 'success');
+        showNotification('✅ API টি সুরক্ষিতভাবে সংরক্ষণ করা হয়েছে!', 'success');
         updateApiStatus('success', '✅ API টি সংরক্ষণ করা হয়েছে! আপনি এখন অনুবাদ করতে পারেন।');
     } catch (error) {
         showNotification('সংরক্ষণ ব্যর্থ: ' + error.message, 'error');
@@ -298,11 +298,11 @@ function loadApiKey() {
 }
 
 function clearApiKey() {
-    if (confirm('আপনি কি নিশ্চিত যে API কী ডিলিট করতে চান?')) {
+    if (confirm('আপনি কি নিশ্চিত যে API টি ডিলিট করতে চান?')) {
         apiKeyManager.clearApiKey();
         document.getElementById('apiKeyInput').value = '';
-        updateApiStatus('warning', '🔑 API কী প্রয়োজন। নিচে আপনার API কী দিন।');
-        showNotification('API কী ডিলিট করা হয়েছে', 'info');
+        updateApiStatus('warning', '🔑 API টি প্রয়োজন। নিচে আপনার API টি দিন।');
+        showNotification('API টি ডিলিট করা হয়েছে', 'info');
     }
 }
 
@@ -326,7 +326,7 @@ async function testApiKey() {
     
     if (apiKey === '••••••••••••••••') {
         if (!GEMINI_API_KEY) {
-            showNotification('দয়া করে প্রথমে একটি API কী সেভ করুন', 'error');
+            showNotification('দয়া করে প্রথমে একটি API টি সেভ করুন', 'error');
             return;
         }
         apiKey = GEMINI_API_KEY;
@@ -335,7 +335,7 @@ async function testApiKey() {
             apiKeyManager.saveApiKey(apiKey);
             apiKeyInput.value = '••••••••••••••••';
         } catch (error) {
-            showNotification('API কী সেভ করতে সমস্যা: ' + error.message, 'error');
+            showNotification('API টি সেভ করতে সমস্যা: ' + error.message, 'error');
             return;
         }
     }
@@ -355,7 +355,7 @@ async function testApiKey() {
         });
         
         if (response.ok) {
-            showNotification('✅ API কী সঠিক! আপনি এখন অনুবাদ করতে পারেন।', 'success');
+            showNotification('✅ API টি সঠিক! আপনি এখন অনুবাদ করতে পারেন।', 'success');
             updateApiStatus('success', '✅ API টি সঠিক! আপনি এখন অনুবাদ করতে পারেন।');
         } else {
             // read response body for more details if available
@@ -365,7 +365,7 @@ async function testApiKey() {
             throw new Error('API টি বৈধ নয়');
         }
     } catch (error) {
-        showNotification('❌ API কী ত্রুটি: ' + error.message, 'error');
+        showNotification('❌ API টি ত্রুটি: ' + error.message, 'error');
         updateApiStatus('error', '❌ API টি ত্রুটি: ' + error.message);
     } finally {
         hideLoading();
@@ -382,12 +382,12 @@ async function extractAndTranslate() {
     }
 
     if (!GEMINI_API_KEY) {
-        showNotification("দয়া করে প্রথমে একটি বৈধ জিমিনি API কী সেট করুন।", 'error');
+        showNotification("দয়া করে প্রথমে একটি বৈধ জিমিনি API টি সেট করুন।", 'error');
         document.getElementById("apiKeyInput").focus();
         return;
     }
 
-    if (currentFile.size > 20 * 1024 * 1024) {
+    if (currentFile.size > 25 * 1024 * 1024) {
         showNotification("ফাইল খুব বড়! দয়া করে ২০ এমবি-এর ছোট ফাইল আপলোড করুন।", 'error');
         return;
     }
@@ -606,9 +606,9 @@ async function translateWithGemini(text, isTest = false) {
         console.error("Gemini API error:", error);
         
         const errorMessages = {
-            'API_KEY_MISSING': 'API কী পাওয়া যায়নি। দয়া করে API কী সেট করুন।',
+            'API_KEY_MISSING': 'API টি পাওয়া যায়নি। দয়া করে API টি সেট করুন।',
             'API_QUOTA_EXCEEDED': 'API লিমিট শেষ হয়েছে। পরে চেষ্টা করুন।',
-            'INVALID_API_KEY': 'API কী ভুল। দয়া করে সঠিক API কী দিন।',
+            'INVALID_API_KEY': 'API টি ভুল। দয়া করে সঠিক API টি দিন।',
             'NETWORK_ERROR': 'নেটওয়ার্ক সমস্যা। ইন্টারনেট সংযোগ চেক করুন।'
         };
         
