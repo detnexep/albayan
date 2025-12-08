@@ -451,7 +451,17 @@ async function extractNormalAndTranslate(file) {
                 arabicText += `পৃষ্ঠা ${i}:\n${pageText}\n\n`;
                 document.getElementById("arabicText").value = arabicText;
 
-                const translatedText = await translateWithGemini(pageText);
+                let translatedText = "";
+                try {
+                    translatedText = await translateWithGemini(pageText);
+                } catch (e) {
+                    console.warn("Translation failed for page", i, e);
+                    translatedText = "";
+                }
+                if (!translatedText || translatedText.trim() === "") {
+                    translatedText = "[অনুবাদ পাওয়া যায়নি]";
+                }
+
                 banglaTranslation += `পৃষ্ঠা ${i}:\n${translatedText}\n\n`;
                 document.getElementById("banglaText").value = banglaTranslation;
             }
@@ -522,7 +532,17 @@ async function extractWithOCRAndTranslate(file) {
                 arabicText += `পৃষ্ঠা ${i}:\n${text}\n\n`;
                 document.getElementById("arabicText").value = arabicText;
 
-                const translatedText = await translateWithGemini(text);
+                let translatedText = "";
+                try {
+                    translatedText = await translateWithGemini(text);
+                } catch (e) {
+                    console.warn("OCR translation failed for page", i, e);
+                    translatedText = "";
+                }
+                if (!translatedText || translatedText.trim() === "") {
+                    translatedText = "[অনুবাদ পাওয়া যায়নি]";
+                }
+
                 banglaTranslation += `পৃষ্ঠা ${i}:\n${translatedText}\n\n`;
                 document.getElementById("banglaText").value = banglaTranslation;
             }
@@ -595,14 +615,79 @@ async function translateWithGemini(text, isTest = false) {
             }
         }
 
-        const data = await response.json();
-        // The API response structure changed slightly in newer versions, but this fallback should cover it.
-        const translatedText = data?.candidates?.[0]?.content?.parts?.[0]?.text
-            || data?.output?.[0]?.content?.text
-            || "";
+        const data = await response.json().catch(() => null);
+        console.debug("Gemini raw response:", data);
+
+        // Try to robustly extract the translated text from multiple possible response shapes
+        let translatedText = "";
+
+        // 1) candidates -> content -> parts -> text
+        if (!translatedText && data?.candidates && data.candidates.length) {
+            const cand = data.candidates[0];
+            if (cand) {
+                // candidate.content might be array of content blocks
+                if (Array.isArray(cand.content)) {
+                    for (const block of cand.content) {
+                        if (!translatedText && block?.type === "output_text" && block?.text) {
+                            translatedText = block.text;
+                        } else if (!translatedText && block?.parts) {
+                            translatedText = block.parts.map(p => p.text || "").join("");
+                        } else if (!translatedText && block?.text) {
+                            translatedText = block.text;
+                        }
+                        if (translatedText) break;
+                    }
+                } else {
+                    // single object
+                    translatedText = cand.content?.parts?.map(p => p.text || "").join("") || cand.content?.text || "";
+                }
+            }
+        }
+
+        // 2) outputs (some responses use outputs array)
+        if (!translatedText && data?.outputs && data.outputs.length) {
+            const out = data.outputs[0];
+            if (out?.content) {
+                if (Array.isArray(out.content)) {
+                    for (const c of out.content) {
+                        if (!translatedText && (c?.type === "output_text" && c?.text)) {
+                            translatedText = c.text;
+                        } else if (!translatedText && c?.parts) {
+                            translatedText = c.parts.map(p => p.text || "").join("");
+                        } else if (!translatedText && c?.text) {
+                            translatedText = c.text;
+                        }
+                        if (translatedText) break;
+                    }
+                } else {
+                    translatedText = out.content?.parts?.map(p => p.text || "").join("") || out.content?.text || "";
+                }
+            }
+        }
+
+        // 3) legacy 'output' / 'output[0].content.text'
+        if (!translatedText && data?.output && data.output.length) {
+            translatedText = data.output[0]?.content?.text || "";
+        }
+
+        // 4) fallback common fields
+        if (!translatedText && data?.candidates?.[0]?.content?.parts?.[0]?.text) {
+            translatedText = data.candidates[0].content.parts[0].text;
+        }
+        if (!translatedText && data?.result?.outputs && data.result.outputs[0]?.content?.text) {
+            translatedText = data.result.outputs[0].content.text;
+        }
+
+        translatedText = (translatedText || "").trim();
 
         if (isTest) {
             return "API_TEST_SUCCESS";
+        }
+
+        // If still empty, warn and return empty string (caller will handle fallback)
+        if (!translatedText) {
+            console.warn("translateWithGemini: Could not extract translated text from response.");
+            return "";
         }
 
         return translatedText;
