@@ -9,7 +9,8 @@ let GEMINI_API_KEY = "";
 let isTranslationRunning = false;
 
 // Gemini API Configuration
-const GEMINI_API_URL = "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash-lite:generateContent";
+// FIXED: Updated to the recommended latest model: gemini-2.5-flash
+const GEMINI_API_URL = "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent";
 // Encryption Key
 const ENCRYPTION_KEY = 'al-bayan-secure-key-2025-32chars!!';
 
@@ -479,6 +480,7 @@ async function extractWithOCRAndTranslate(file) {
 
     try {
         if (!tesseractWorker) {
+            // Note: Tesseract.js is a large library; consider optimizing loading.
             tesseractWorker = await Tesseract.createWorker("ara");
         }
 
@@ -567,6 +569,7 @@ async function translateWithGemini(text, isTest = false) {
                 }
             ],
             generationConfig: {
+                // Using 2.5 Flash defaults which are fine, but keeping temperature low for accurate translation
                 temperature: 0.2,
                 maxOutputTokens: 1000
             }
@@ -593,6 +596,7 @@ async function translateWithGemini(text, isTest = false) {
         }
 
         const data = await response.json();
+        // The API response structure changed slightly in newer versions, but this fallback should cover it.
         const translatedText = data?.candidates?.[0]?.content?.parts?.[0]?.text
             || data?.output?.[0]?.content?.text
             || "";
@@ -759,7 +763,10 @@ function showTab(tabName) {
         targetTab.classList.remove("hidden");
     }
     
-    event.currentTarget.classList.add("active");
+    // Note: event is passed implicitly here from the inline JS call in HTML
+    if (event && event.currentTarget) {
+        event.currentTarget.classList.add("active");
+    }
 }
 
 // ==================== READER FUNCTIONS ====================
@@ -773,11 +780,11 @@ function openReader(type) {
     if (type === "arabic") {
         title.textContent = "আরবি টেক্সট";
         content = document.getElementById("arabicText").value || "কোনো টেক্সট নেই";
-        body.innerHTML = `<div class="arabic-text" style="font-size: 24px; line-height: 3;">${content}</div>`;
+        body.innerHTML = `<div class="arabic-text" style="font-size: 24px; line-height: 3; text-align: right; direction: rtl;">${content}</div>`;
     } else {
         title.textContent = "বাংলা অনুবাদ";
         content = document.getElementById("banglaText").value || "কোনো অনুবাদ নেই";
-        body.innerHTML = `<div class="bangla-text" style="font-size: 20px; line-height: 2;">${content}</div>`;
+        body.innerHTML = `<div class="bangla-text" style="font-size: 20px; line-height: 2; text-align: left;">${content}</div>`;
     }
 
     modal.style.display = "block";
@@ -790,10 +797,11 @@ function closeReader() {
 }
 
 function changeFontSize(delta) {
-    const body = document.getElementById("readerBody");
-    const currentSize = parseInt(window.getComputedStyle(body.querySelector("div")).fontSize);
+    const bodyDiv = document.getElementById("readerBody").querySelector("div");
+    if (!bodyDiv) return;
+    const currentSize = parseInt(window.getComputedStyle(bodyDiv).fontSize);
     const newSize = Math.max(12, Math.min(40, currentSize + delta));
-    body.querySelector("div").style.fontSize = newSize + "px";
+    bodyDiv.style.fontSize = newSize + "px";
 }
 
 function toggleDarkReader() {
@@ -829,7 +837,15 @@ function speakText() {
         stopSpeech();
 
         const utterance = new SpeechSynthesisUtterance(text);
-        utterance.lang = "bn-BD";
+        // Attempt to find a suitable Bengali voice if available
+        const bnVoice = speechSynthesis.getVoices().find(voice => voice.lang === 'bn-BD' || voice.lang === 'bn-IN');
+        if (bnVoice) {
+            utterance.voice = bnVoice;
+            utterance.lang = bnVoice.lang;
+        } else {
+             utterance.lang = "bn-BD"; // Fallback
+        }
+       
         utterance.rate = 0.8;
         utterance.pitch = 1;
 
@@ -842,7 +858,8 @@ function speakText() {
             stopSpeech();
         };
 
-        utterance.onerror = function () {
+        utterance.onerror = function (e) {
+            console.error('SpeechSynthesisUtterance.onerror', e);
             stopSpeech();
             showNotification("Text-to-speech ত্রুটি হয়েছে।", 'error');
         };
@@ -859,23 +876,39 @@ function stopSpeech() {
     }
     isSpeaking = false;
     const ttsButton = document.getElementById("ttsButton");
-    ttsButton.innerHTML = '<i class="fas fa-volume-up"></i> পড়ুন';
-    ttsButton.classList.remove("tts-active");
+    if (ttsButton) {
+        ttsButton.innerHTML = '<i class="fas fa-volume-up"></i> পড়ুন';
+        ttsButton.classList.remove("tts-active");
+    }
 }
 
 // ==================== HISTORY FUNCTIONS ====================
 
 function saveToHistory() {
+    // Get the full, current texts to save
+    const fullArabicText = document.getElementById("arabicText").value;
+    const fullBanglaText = document.getElementById("banglaText").value;
+    
+    if (!fullArabicText && !fullBanglaText) return;
+
     const history = JSON.parse(localStorage.getItem("translationHistory") || "[]");
     const newItem = {
         id: Date.now(),
         title: currentFile?.name || "অনুবাদ",
-        arabicText: document.getElementById("arabicText").value.substring(0, 200) + "...",
-        banglaText: document.getElementById("banglaText").value.substring(0, 200) + "...",
+        // Save the full text
+        fullArabicText: fullArabicText,
+        fullBanglaText: fullBanglaText,
+        // Save truncated versions for preview in the history grid
+        previewArabicText: fullArabicText.substring(0, 200) + (fullArabicText.length > 200 ? "..." : ""),
+        previewBanglaText: fullBanglaText.substring(0, 200) + (fullBanglaText.length > 200 ? "..." : ""),
         date: new Date().toLocaleDateString("bn-BD"),
     };
 
     history.unshift(newItem);
+    // Keep history size manageable (e.g., max 20 items)
+    if (history.length > 20) {
+        history.pop();
+    }
     localStorage.setItem("translationHistory", JSON.stringify(history));
     loadHistory();
 }
@@ -903,7 +936,7 @@ function loadHistory() {
                 <div class="history-title">${item.title}</div>
                 <div class="history-date">${item.date}</div>
             </div>
-            <div class="history-preview">${item.banglaText}</div>
+            <div class="history-preview">${item.previewBanglaText}</div>
         </div>
     `).join("");
 }
@@ -913,8 +946,15 @@ function loadHistoryItem(id) {
     const item = history.find((h) => h.id === id);
 
     if (item) {
-        document.getElementById("arabicText").value = item.arabicText;
-        document.getElementById("banglaText").value = item.banglaText;
+        // FIXED: Use the full text fields from the history item
+        document.getElementById("arabicText").value = item.fullArabicText || "";
+        document.getElementById("banglaText").value = item.fullBanglaText || "";
+        
+        // Reset current file state as it's from history, not a new file upload
+        currentFile = null; 
+        document.getElementById("pdfFile").value = ""; 
+        document.getElementById("fileInfo").style.display = "none";
+
         showTab("translate");
         showNotification("ইতিহাস থেকে লোড করা হয়েছে!", 'success');
     }
@@ -961,7 +1001,7 @@ function clearAll() {
 // Close modal when clicking outside
 window.onclick = function (event) {
     const modal = document.getElementById("readerModal");
-    if (event.target === modal) {
+    if (modal && event.target === modal) {
         closeReader();
     }
 };
