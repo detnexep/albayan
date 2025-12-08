@@ -429,7 +429,7 @@ async function extractAndTranslate() {
 async function extractNormalAndTranslate(file) {
     try {
         const pdf = await pdfjsLib.getDocument(await file.arrayBuffer()).promise;
-        const totalPages = Math.min(pdf.numPages, 400); // Start with 3 pages for testing
+        const totalPages = Math.min(pdf.numPages, 4000); // Start with 3 pages for testing
         let arabicText = "";
         let banglaTranslation = "";
 
