@@ -26,7 +26,7 @@ document.addEventListener("DOMContentLoaded", function () {
     showNotification("Al Bayan অ্যাপ্লিকেশন সফলভাবে লোড হয়েছে!", 'success');
 });
 
-// ==================== BASIC FUNCTIONS ====================
+// ==================== BASIC FUNCTIONS ===================
 
 // Theme functionality
 function initializeTheme() {
@@ -84,16 +84,18 @@ function displayFileInfo(file) {
 }
 
 // PDF type selection
-function selectPdfType(type) {
+function selectPdfType(type, event) {
     selectedPdfType = type;
     document.querySelectorAll(".pdf-type-option").forEach((opt) => {
         opt.classList.remove("active");
         opt.style.border = "2px solid transparent";
     });
     
-    const activeOption = event.currentTarget;
-    activeOption.classList.add("active");
-    activeOption.style.border = "2px solid #3E8999";
+    if (event && event.currentTarget) {
+      const activeOption = event.currentTarget;
+      activeOption.classList.add("active");
+      activeOption.style.border = "2px solid #3E8999";
+    }
 }
 
 // Update API Status
@@ -342,7 +344,7 @@ async function testApiKey() {
     
     try {
         // Simple test request
-        const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${apiKey}`, {
+        const response = await fetch(`${GEMINI_API_URL}?key=${apiKey}`, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({
@@ -356,6 +358,10 @@ async function testApiKey() {
             showNotification('✅ API কী সঠিক! আপনি এখন অনুবাদ করতে পারেন।', 'success');
             updateApiStatus('success', '✅ API টি সঠিক! আপনি এখন অনুবাদ করতে পারেন।');
         } else {
+            // read response body for more details if available
+            let errText = "";
+            try { errText = await response.text(); } catch(e) { errText = ""; }
+            console.warn("API test failed", response.status, errText);
             throw new Error('API টি বৈধ নয়');
         }
     } catch (error) {
@@ -537,23 +543,34 @@ async function extractWithOCRAndTranslate(file) {
     }
 }
 
-// Real Gemini API translation
-const requestBody = {
-  contents: [
-    {
-      role: "user",
-      parts: [
-        {
-          text: `Translate this Arabic Islamic text to Bangla. Preserve Islamic meaning accurately. Only return the Bangla translation.\n\n${text.substring(0, 1000)}`
+// Proper translateWithGemini function
+async function translateWithGemini(text, isTest = false) {
+    try {
+        if (!GEMINI_API_KEY) {
+            throw new Error('API_KEY_MISSING');
         }
-      ]
-    }
-  ],
-  generationConfig: {
-    temperature: 0.2,
-    maxOutputTokens: 1000
-  }
-};
+
+        const apiUrl = `${GEMINI_API_URL}?key=${GEMINI_API_KEY}`;
+
+        // keep the text reasonably sized for a single request
+        const safeText = (typeof text === 'string') ? text.substring(0, 4000) : '';
+
+        const requestBody = {
+            contents: [
+                {
+                    role: "user",
+                    parts: [
+                        {
+                            text: `Translate this Arabic Islamic text to Bangla. Preserve Islamic meaning accurately. Only return the Bangla translation.\n\n${safeText}`
+                        }
+                    ]
+                }
+            ],
+            generationConfig: {
+                temperature: 0.2,
+                maxOutputTokens: 1000
+            }
+        };
 
         const response = await fetch(apiUrl, {
             method: "POST",
@@ -564,19 +581,21 @@ const requestBody = {
         });
 
         if (!response.ok) {
-            const errorData = await response.json();
-            
+            const errorData = await response.json().catch(() => null);
+
             if (response.status === 429) {
                 throw new Error('API_QUOTA_EXCEEDED');
-            } else if (response.status === 401) {
+            } else if (response.status === 401 || response.status === 403) {
                 throw new Error('INVALID_API_KEY');
             } else {
-                throw new Error(errorData.error?.message || `API Error: ${response.status}`);
+                throw new Error(errorData?.error?.message || `API Error: ${response.status}`);
             }
         }
 
         const data = await response.json();
-        const translatedText = data.candidates[0].content.parts[0].text;
+        const translatedText = data?.candidates?.[0]?.content?.parts?.[0]?.text
+            || data?.output?.[0]?.content?.text
+            || "";
 
         if (isTest) {
             return "API_TEST_SUCCESS";
