@@ -9,22 +9,30 @@ let GEMINI_API_KEY = "";
 let isTranslationRunning = false;
 
 // Gemini API Configuration
-// FIXED: Updated to the recommended latest model: gemini-2.5-flash
 const GEMINI_API_URL = "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent";
 // Encryption Key
 const ENCRYPTION_KEY = 'al-bayan-secure-key-2025-32chars!!';
 
 console.log("Al Bayan App Initializing...");
 
-// ==================== GEMINI RATE LIMIT / SANITIZER HELPERS ====================
-// (Added to avoid flooding the API and to remove model debug tokens from output)
+// ==================== GEMINI RATE LIMIT / SANITIZER / BATCH HELPERS ====================
+// Prevent flooding the Gemini API and reduce token waste by batching pages.
+
 let geminiActiveRequests = 0;
 let lastGeminiRequestTs = 0;
-const GEMINI_MAX_CONCURRENT = 1;      // max parallel requests to Gemini
-const GEMINI_MIN_DELAY_MS = 800;     // minimum delay between requests (ms)
+
+// Tuning constants (adjust to your quota/needs)
+const GEMINI_MAX_CONCURRENT = 1;      // Max parallel requests to Gemini
+const GEMINI_MIN_DELAY_MS = 800;     // Minimum delay between requests (ms)
+
+const MAX_CHARS_PER_REQUEST = 8000;   // Approx max input chars per request (tune down if needed)
+const MAX_RETRIES = 5;
+const INITIAL_BACKOFF_MS = 1000;
+const BACKOFF_MULTIPLIER = 2;
+const JITTER_MS = 300;
 
 async function waitForGeminiSlot() {
-    // simple concurrency + pacing
+    // Simple concurrency + pacing
     while (geminiActiveRequests >= GEMINI_MAX_CONCURRENT) {
         await delay(100);
     }
@@ -66,9 +74,290 @@ function sanitizeModelNoise(text) {
     return out;
 }
 
-console.log("Al Bayan App Initializing...");
+// requestWithRetries: sends POST to Gemini with retries for 429/503, respects Retry-After
+async function requestWithRetries(apiUrl, requestBody) {
+    let attempt = 0;
+    let backoff = INITIAL_BACKOFF_MS;
 
-// Initialize the application
+    while (attempt <= MAX_RETRIES) {
+        attempt++;
+        await waitForGeminiSlot();
+        let response;
+        try {
+            response = await fetch(apiUrl, {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify(requestBody),
+            });
+        } catch (networkErr) {
+            // network-level error; apply backoff and retry
+            releaseGeminiSlot();
+            if (attempt > MAX_RETRIES) throw networkErr;
+            const jitter = Math.floor(Math.random() * JITTER_MS);
+            await delay(backoff + jitter);
+            backoff *= BACKOFF_MULTIPLIER;
+            continue;
+        }
+
+        // success path for 2xx
+        if (response.ok) {
+            let data;
+            try {
+                data = await response.json();
+            } catch (e) {
+                data = await response.text().catch(() => null);
+            }
+            releaseGeminiSlot();
+            return data;
+        }
+
+        // non-OK path
+        const retryAfter = response.headers.get('Retry-After');
+        let waitMs = 0;
+        if (retryAfter) {
+            const seconds = parseInt(retryAfter, 10);
+            if (!isNaN(seconds)) {
+                waitMs = seconds * 1000;
+            } else {
+                const then = Date.parse(retryAfter);
+                if (!isNaN(then)) {
+                    const diff = then - Date.now();
+                    waitMs = Math.max(0, diff);
+                }
+            }
+        }
+
+        const status = response.status;
+        const rawBody = await response.text().catch(() => null);
+        let errObj = null;
+        try { errObj = JSON.parse(rawBody); } catch (e) { errObj = null; }
+
+        releaseGeminiSlot();
+
+        // handle retryable statuses
+        if ((status === 429 || status === 503) && attempt <= MAX_RETRIES) {
+            if (waitMs > 0) {
+                await delay(waitMs + Math.floor(Math.random() * JITTER_MS));
+            } else {
+                const jitter = Math.floor(Math.random() * JITTER_MS);
+                await delay(backoff + jitter);
+                backoff *= BACKOFF_MULTIPLIER;
+            }
+            continue;
+        }
+
+        // non-retryable or max retries reached -> throw
+        const message = errObj?.error?.message || rawBody || `API Error: ${status}`;
+        const e = new Error(message);
+        e.status = status;
+        throw e;
+    }
+
+    throw new Error("Max retries exceeded for Gemini request");
+}
+
+// Helper: builds a single combined prompt for a batch of pages, asks for page-labeled translations
+function buildBatchPrompt(pages) {
+    // pages: [{pageNumber, text}, ...]
+    const sentinel = '---PAGE_BREAK---';
+    let promptParts = [];
+    promptParts.push(`You are to translate Arabic Islamic text to Bangla. Preserve Islamic meaning accurately and do not add commentary.`);
+    promptParts.push(`For each page provided, output the Bangla translation only. Separate each page's translation with the exact sentinel token: ${sentinel}`);
+    promptParts.push(`Also prefix each translation with "PAGE:{pageNumber}" so we can map translations back to pages. Example output format:`);
+    promptParts.push(`PAGE:1\n<bangla translation for page1>\n${sentinel}\nPAGE:2\n<bangla translation for page2>\n${sentinel}\n...`);
+    promptParts.push(`Now translate the following pages in order:`);
+
+    for (const p of pages) {
+        promptParts.push(`PAGE:${p.pageNumber}\n${p.text}\n`);
+    }
+
+    return promptParts.join("\n\n");
+}
+
+// batchTranslatePages: sends one request for a chunk of pages and returns translations mapped by pageNumber
+async function batchTranslatePages(pages) {
+    if (!pages || pages.length === 0) return {};
+
+    const apiUrl = `${GEMINI_API_URL}?key=${GEMINI_API_KEY}`;
+    const sentinel = '---PAGE_BREAK---';
+    const prompt = buildBatchPrompt(pages);
+
+    const requestBody = {
+        contents: [
+            {
+                role: "user",
+                parts: [{ text: prompt }]
+            }
+        ],
+        generationConfig: {
+            temperature: 0.2,
+            maxOutputTokens: 2000
+        }
+    };
+
+    const rawResponse = await requestWithRetries(apiUrl, requestBody);
+    console.debug("Gemini raw response (batch):", rawResponse);
+
+    // Extract strings from response object
+    function extractTextFromData(obj, collected = []) {
+        if (!obj) return collected;
+        if (typeof obj === 'string') {
+            const t = obj.trim();
+            if (t) collected.push(t);
+            return collected;
+        }
+        if (Array.isArray(obj)) {
+            for (const it of obj) extractTextFromData(it, collected);
+            return collected;
+        }
+        if (typeof obj === 'object') {
+            for (const k of Object.keys(obj)) {
+                const v = obj[k];
+                if (k === 'text' || k === 'output_text') {
+                    if (typeof v === 'string' && v.trim()) collected.push(v.trim());
+                    continue;
+                }
+                if (k === 'parts' && Array.isArray(v)) {
+                    for (const p of v) {
+                        if (p && typeof p.text === 'string' && p.text.trim()) collected.push(p.text.trim());
+                        else extractTextFromData(p, collected);
+                    }
+                    continue;
+                }
+                extractTextFromData(v, collected);
+            }
+            return collected;
+        }
+        return collected;
+    }
+
+    const pieces = extractTextFromData(rawResponse);
+    let joined = (pieces.join("\n\n") || "").trim();
+    joined = sanitizeModelNoise(joined);
+
+    const resultMap = {}; // pageNumber => translation
+    if (!joined) return resultMap;
+
+    // split by sentinel
+    const segments = joined.split(sentinel).map(s => s.trim()).filter(s => s.length > 0);
+
+    for (const seg of segments) {
+        // find PAGE:<num> prefix
+        const m = seg.match(/^PAGE\s*:\s*(\d+)\s*\n?([\s\S]*)$/i);
+        if (m) {
+            const pn = parseInt(m[1], 10);
+            const text = m[2] ? m[2].trim() : "";
+            if (pn && text) {
+                resultMap[pn] = text;
+                continue;
+            }
+        }
+    }
+
+    // If tags absent or incomplete, attempt sequential mapping
+    if (Object.keys(resultMap).length === 0) {
+        for (let i = 0; i < segments.length && i < pages.length; i++) {
+            resultMap[pages[i].pageNumber] = segments[i];
+        }
+    } else {
+        for (const p of pages) {
+            if (!resultMap[p.pageNumber]) resultMap[p.pageNumber] = "";
+        }
+    }
+
+    return resultMap;
+}
+
+// Simple single-page wrapper (keeps compatibility for small direct calls)
+async function translateWithGemini(text, isTest = false) {
+    try {
+        if (!GEMINI_API_KEY) {
+            throw new Error('API_KEY_MISSING');
+        }
+        const apiUrl = `${GEMINI_API_URL}?key=${GEMINI_API_KEY}`;
+        const safeText = (typeof text === 'string') ? text.substring(0, 15000) : '';
+
+        const requestBody = {
+            contents: [
+                {
+                    role: "user",
+                    parts: [
+                        {
+                            text: `Translate this Arabic Islamic text to Bangla. Preserve Islamic meaning accurately. Only return the Bangla translation.\n\n${safeText}`
+                        }
+                    ]
+                }
+            ],
+            generationConfig: {
+                temperature: 0.2,
+                maxOutputTokens: 1000
+            }
+        };
+
+        const rawResponse = await requestWithRetries(apiUrl, requestBody);
+        console.debug("Gemini raw response (single):", rawResponse);
+
+        if (isTest) return "API_TEST_SUCCESS";
+
+        // Extract text like batch
+        function extractText(obj, collected = []) {
+            if (!obj) return collected;
+            if (typeof obj === 'string') {
+                const t = obj.trim();
+                if (t) collected.push(t);
+                return collected;
+            }
+            if (Array.isArray(obj)) {
+                for (const item of obj) extractText(item, collected);
+                return collected;
+            }
+            if (typeof obj === 'object') {
+                for (const key of Object.keys(obj)) {
+                    const val = obj[key];
+                    if (key === 'text' || key === 'output_text') {
+                        if (typeof val === 'string' && val.trim()) {
+                            collected.push(val.trim());
+                            continue;
+                        }
+                    }
+                    if (key === 'parts' && Array.isArray(val)) {
+                        for (const p of val) {
+                            if (p && typeof p.text === 'string' && p.text.trim()) {
+                                collected.push(p.text.trim());
+                            } else {
+                                extractText(p, collected);
+                            }
+                        }
+                        continue;
+                    }
+                    extractText(val, collected);
+                }
+                return collected;
+            }
+            return collected;
+        }
+
+        const pieces = extractText(rawResponse);
+        const filtered = pieces.filter(p => typeof p === 'string' && p.length > 8);
+        let translated = (filtered.join("\n\n") || pieces.join("\n\n") || "").trim();
+        translated = sanitizeModelNoise(translated);
+        return translated || "";
+    } catch (error) {
+        console.error("Gemini API error:", error);
+        const errorMessages = {
+            'API_KEY_MISSING': 'API টি পাওয়া যায়নি। দয়া করে API টি সেট করুন।',
+            'API_QUOTA_EXCEEDED': 'API লিমিট শেষ হয়েছে। পরে চেষ্টা করুন।',
+            'INVALID_API_KEY': 'API টি ভুল। দয়া করে সঠিক API টি দিন।',
+            'NETWORK_ERROR': 'নেটওয়ার্ক সমস্যা। ইন্টারনেট সংযোগ চেক করুন।'
+        };
+        const userMessage = errorMessages[error.message] || `অনুবাদ ব্যর্থ: ${error.message}`;
+        showNotification(userMessage, 'error');
+        throw error;
+    }
+}
+
+// ==================== BASIC UI / INIT FUNCTIONS ====================
+
 document.addEventListener("DOMContentLoaded", function () {
     console.log("DOM Content Loaded");
     initializeTheme();
@@ -78,8 +367,6 @@ document.addEventListener("DOMContentLoaded", function () {
     initializeEnhancedFeatures();
     showNotification("Al Bayan অ্যাপ্লিকেশন সফলভাবে লোড হয়েছে!", 'success');
 });
-
-// ==================== BASIC FUNCTIONS ===================
 
 // Theme functionality
 function initializeTheme() {
@@ -344,7 +631,8 @@ function saveApiKey() {
 function loadApiKey() {
     const success = apiKeyManager.loadApiKey();
     if (success) {
-        document.getElementById('apiKeyInput').value = '••••••••••••••••';
+        const input = document.getElementById('apiKeyInput');
+        if (input) input.value = '••••••••••••••••';
         updateApiStatus('success', '✅ API টি লোড হয়েছে! আপনি এখন অনুবাদ করতে পারেন।');
     }
     return success;
@@ -353,7 +641,8 @@ function loadApiKey() {
 function clearApiKey() {
     if (confirm('আপনি কি নিশ্চিত যে API টি ডিলিট করতে চান?')) {
         apiKeyManager.clearApiKey();
-        document.getElementById('apiKeyInput').value = '';
+        const input = document.getElementById('apiKeyInput');
+        if (input) input.value = '';
         updateApiStatus('warning', '🔑 API টি প্রয়োজন। নিচে আপনার API টি দিন।');
         showNotification('API টি ডিলিট করা হয়েছে', 'info');
     }
@@ -362,7 +651,7 @@ function clearApiKey() {
 function showApiKey() {
     const apiKeyInput = document.getElementById('apiKeyInput');
     
-    if (apiKeyInput.type === 'password' && GEMINI_API_KEY) {
+    if (apiKeyInput && apiKeyInput.type === 'password' && GEMINI_API_KEY) {
         apiKeyInput.type = 'text';
         apiKeyInput.value = GEMINI_API_KEY;
         
@@ -396,26 +685,13 @@ async function testApiKey() {
     showLoading('API কী টেস্ট করা হচ্ছে...');
     
     try {
-        // Simple test request
-        const response = await fetch(`${GEMINI_API_URL}?key=${apiKey}`, {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-                contents: [{
-                    parts: [{ text: "Hello" }]
-                }]
-            })
-        });
-        
-        if (response.ok) {
+        // Simple test request using single translate wrapper
+        const res = await translateWithGemini("Hello", true);
+        if (res === "API_TEST_SUCCESS") {
             showNotification('✅ API টি সঠিক! আপনি এখন অনুবাদ করতে পারেন।', 'success');
             updateApiStatus('success', '✅ API টি সঠিক! আপনি এখন অনুবাদ করতে পারেন।');
         } else {
-            // read response body for more details if available
-            let errText = "";
-            try { errText = await response.text(); } catch(e) { errText = ""; }
-            console.warn("API test failed", response.status, errText);
-            throw new Error('API টি বৈধ নয়');
+            throw new Error("API টেস্ট ব্যর্থ");
         }
     } catch (error) {
         showNotification('❌ API টি ত্রুটি: ' + error.message, 'error');
@@ -446,8 +722,9 @@ async function extractAndTranslate() {
     }
 
     const extractTranslateBtn = document.getElementById("extractTranslateBtn");
-    extractTranslateBtn.disabled = true;
-    document.getElementById("stopBtn").style.display = "inline-flex";
+    if (extractTranslateBtn) extractTranslateBtn.disabled = true;
+    const stopBtn = document.getElementById("stopBtn");
+    if (stopBtn) stopBtn.style.display = "inline-flex";
     isTranslationRunning = true;
 
     try {
@@ -469,23 +746,41 @@ async function extractAndTranslate() {
         }
     } finally {
         if (isTranslationRunning) {
-            extractTranslateBtn.disabled = false;
-            document.getElementById("stopBtn").style.display = "none";
+            if (extractTranslateBtn) extractTranslateBtn.disabled = false;
+            if (stopBtn) stopBtn.style.display = "none";
             hideLoading();
             isTranslationRunning = false;
         }
     }
 }
 
-// Normal PDF extraction with translation
+// Normal PDF extraction with batching translation
 async function extractNormalAndTranslate(file) {
     try {
         const pdf = await pdfjsLib.getDocument(await file.arrayBuffer()).promise;
-        const totalPages = Math.min(pdf.numPages, 4000); // Start with 3 pages for testing
+        const totalPages = Math.min(pdf.numPages, 4000);
         let arabicText = "";
         let banglaTranslation = "";
 
         document.getElementById("progressContainer").style.display = "block";
+
+        // We'll accumulate pages into chunks
+        let chunk = []; // array of {pageNumber, text}
+        let chunkChars = 0;
+
+        const flushChunk = async () => {
+            if (chunk.length === 0) return {};
+            try {
+                const translationsMap = await batchTranslatePages(chunk);
+                return translationsMap;
+            } catch (e) {
+                console.warn("Batch translation failed", e);
+                return {};
+            } finally {
+                chunk = [];
+                chunkChars = 0;
+            }
+        };
 
         for (let i = 1; i <= totalPages; i++) {
             if (!isTranslationRunning) {
@@ -503,25 +798,34 @@ async function extractNormalAndTranslate(file) {
                 arabicText += `পৃষ্ঠা ${i}:\n${pageText}\n\n`;
                 document.getElementById("arabicText").value = arabicText;
 
-                let translatedText = "";
-                try {
-                    translatedText = await translateWithGemini(pageText);
-                } catch (e) {
-                    console.warn("Translation failed for page", i, e);
-                    translatedText = "";
+                // Add to chunk
+                const approxLen = pageText.length;
+                chunk.push({ pageNumber: i, text: pageText });
+                chunkChars += approxLen;
+
+                // Flush if chunk large enough or last page
+                let translationsMap = {};
+                const isLast = (i === totalPages);
+                if (chunkChars >= MAX_CHARS_PER_REQUEST || isLast) {
+                    translationsMap = await flushChunk();
                 }
-                if (!translatedText || translatedText.trim() === "") {
+
+                let translatedText = translationsMap[i] || "";
+                if (!translatedText) {
                     translatedText = "[অনুবাদ পাওয়া যায়নি]";
                 }
 
                 banglaTranslation += `পৃষ্ঠা ${i}:\n${translatedText}\n\n`;
+                document.getElementById("banglaText").value = banglaTranslation;
+            } else {
+                banglaTranslation += `পৃষ্ঠা ${i}:\n[কোনো টেক্সট নেই]\n\n`;
                 document.getElementById("banglaText").value = banglaTranslation;
             }
 
             const progress = Math.round((i / totalPages) * 100);
             updateProgress(progress);
 
-            await delay(1000);
+            await delay(200);
         }
 
         if (isTranslationRunning) {
@@ -536,7 +840,7 @@ async function extractNormalAndTranslate(file) {
     }
 }
 
-// OCR extraction with translation
+// OCR extraction with batching translation
 async function extractWithOCRAndTranslate(file) {
     showLoading("OCR প্রস্তুত করা হচ্ছে...");
 
@@ -547,11 +851,28 @@ async function extractWithOCRAndTranslate(file) {
         }
 
         const pdf = await pdfjsLib.getDocument(await file.arrayBuffer()).promise;
-        const totalPages = Math.min(pdf.numPages, 2); // Start with 2 pages for testing
+        const totalPages = Math.min(pdf.numPages, 4000);
         let arabicText = "";
         let banglaTranslation = "";
 
         document.getElementById("progressContainer").style.display = "block";
+
+        // batching helpers
+        let chunk = [];
+        let chunkChars = 0;
+        const flushChunk = async () => {
+            if (chunk.length === 0) return {};
+            try {
+                const translationsMap = await batchTranslatePages(chunk);
+                return translationsMap;
+            } catch (e) {
+                console.warn("Batch translation failed", e);
+                return {};
+            } finally {
+                chunk = [];
+                chunkChars = 0;
+            }
+        };
 
         for (let i = 1; i <= totalPages; i++) {
             if (!isTranslationRunning) {
@@ -584,25 +905,34 @@ async function extractWithOCRAndTranslate(file) {
                 arabicText += `পৃষ্ঠা ${i}:\n${text}\n\n`;
                 document.getElementById("arabicText").value = arabicText;
 
-                let translatedText = "";
-                try {
-                    translatedText = await translateWithGemini(text);
-                } catch (e) {
-                    console.warn("OCR translation failed for page", i, e);
-                    translatedText = "";
+                // Add to chunk
+                const approxLen = text.length;
+                chunk.push({ pageNumber: i, text });
+                chunkChars += approxLen;
+
+                // flush if large or last
+                const isLast = (i === totalPages);
+                let translationsMap = {};
+                if (chunkChars >= MAX_CHARS_PER_REQUEST || isLast) {
+                    translationsMap = await flushChunk();
                 }
-                if (!translatedText || translatedText.trim() === "") {
+
+                let translatedText = translationsMap[i] || "";
+                if (!translatedText) {
                     translatedText = "[অনুবাদ পাওয়া যায়নি]";
                 }
 
                 banglaTranslation += `পৃষ্ঠা ${i}:\n${translatedText}\n\n`;
+                document.getElementById("banglaText").value = banglaTranslation;
+            } else {
+                banglaTranslation += `পৃষ্ঠা ${i}:\n[কোনো টেক্সট নেই]\n\n`;
                 document.getElementById("banglaText").value = banglaTranslation;
             }
 
             const progress = Math.round((i / totalPages) * 100);
             updateProgress(progress);
 
-            await delay(2000);
+            await delay(300);
         }
 
         if (isTranslationRunning) {
@@ -614,158 +944,6 @@ async function extractWithOCRAndTranslate(file) {
         if (isTranslationRunning) {
             throw new Error("OCR ত্রুটি: " + error.message);
         }
-    }
-}
-
-// --- Updated translateWithGemini using rate-limited fetch + sanitizer ---
-async function translateWithGemini(text, isTest = false) {
-    try {
-        if (!GEMINI_API_KEY) {
-            throw new Error('API_KEY_MISSING');
-        }
-
-        const apiUrl = `${GEMINI_API_URL}?key=${GEMINI_API_KEY}`;
-
-        // increase substring length to reduce accidental truncation
-        const safeText = (typeof text === 'string') ? text.substring(0, 15000) : '';
-
-        const requestBody = {
-            contents: [
-                {
-                    role: "user",
-                    parts: [
-                        {
-                            text: `Translate this Arabic Islamic text to Bangla. Preserve Islamic meaning accurately. Only return the Bangla translation.\n\n${safeText}`
-                        }
-                    ]
-                }
-            ],
-            generationConfig: {
-                temperature: 0.2,
-                maxOutputTokens: 1000
-            }
-        };
-
-        // Rate-limited send
-        await waitForGeminiSlot();
-        let response;
-        try {
-            response = await fetch(apiUrl, {
-                method: "POST",
-                headers: {
-                    "Content-Type": "application/json",
-                },
-                body: JSON.stringify(requestBody),
-            });
-        } finally {
-            // don't release slot until after we record timestamp in success/failure branch
-        }
-
-        if (!response.ok) {
-            const rawErr = await response.text().catch(() => null);
-            let errorData = null;
-            try { errorData = JSON.parse(rawErr); } catch (e) { errorData = null; }
-
-            releaseGeminiSlot();
-
-            if (response.status === 429) {
-                throw new Error('API_QUOTA_EXCEEDED');
-            } else if (response.status === 401 || response.status === 403) {
-                throw new Error('INVALID_API_KEY');
-            } else {
-                throw new Error(errorData?.error?.message || `API Error: ${response.status} ${rawErr || ''}`);
-            }
-        }
-
-        // parse JSON (or raw)
-        let data;
-        try {
-            data = await response.json();
-        } catch (e) {
-            data = await response.text().catch(() => null);
-            console.debug("Gemini response (non-json):", data);
-        }
-
-        // mark we finished the request
-        releaseGeminiSlot();
-
-        console.debug("Gemini raw response:", data);
-
-        if (isTest) {
-            return "API_TEST_SUCCESS";
-        }
-
-        // Robust recursive extractor
-        function extractText(obj, collected = []) {
-            if (!obj) return collected;
-            if (typeof obj === 'string') {
-                const t = obj.trim();
-                if (t) collected.push(t);
-                return collected;
-            }
-            if (Array.isArray(obj)) {
-                for (const item of obj) extractText(item, collected);
-                return collected;
-            }
-            if (typeof obj === 'object') {
-                for (const key of Object.keys(obj)) {
-                    const val = obj[key];
-                    if (key === 'text' || key === 'output_text') {
-                        if (typeof val === 'string' && val.trim()) {
-                            collected.push(val.trim());
-                            continue;
-                        }
-                    }
-                    if (key === 'parts' && Array.isArray(val)) {
-                        for (const p of val) {
-                            if (p && typeof p.text === 'string' && p.text.trim()) {
-                                collected.push(p.text.trim());
-                            } else {
-                                extractText(p, collected);
-                            }
-                        }
-                        continue;
-                    }
-                    extractText(val, collected);
-                }
-                return collected;
-            }
-            return collected;
-        }
-
-        let translatedText = "";
-        try {
-            const pieces = extractText(data);
-            const filtered = pieces.filter(p => typeof p === 'string' && p.length > 8);
-            translatedText = (filtered.join("\n\n") || pieces.join("\n\n") || "").trim();
-        } catch (e) {
-            console.warn("translateWithGemini: extractor failed", e);
-            translatedText = "";
-        }
-
-        // sanitize model debug tokens / IDs that sometimes are embedded in text
-        translatedText = sanitizeModelNoise(translatedText);
-
-        if (!translatedText) {
-            console.warn("translateWithGemini: Could not extract translated text from response. Full response logged above.");
-            return "";
-        }
-
-        return translatedText;
-    } catch (error) {
-        console.error("Gemini API error:", error);
-        
-        const errorMessages = {
-            'API_KEY_MISSING': 'API টি পাওয়া যায়নি। দয়া করে API টি সেট করুন।',
-            'API_QUOTA_EXCEEDED': 'API লিমিট শেষ হয়েছে। পরে চেষ্টা করুন।',
-            'INVALID_API_KEY': 'API টি ভুল। দয়া করে সঠিক API টি দিন।',
-            'NETWORK_ERROR': 'নেটওয়ার্ক সমস্যা। ইন্টারনেট সংযোগ চেক করুন।'
-        };
-        
-        const userMessage = errorMessages[error.message] || `অনুবাদ ব্যর্থ: ${error.message}`;
-        
-        showNotification(userMessage, 'error');
-        throw error;
     }
 }
 
@@ -798,8 +976,10 @@ function updateProgress(percent) {
 function stopTranslation() {
     if (isTranslationRunning) {
         isTranslationRunning = false;
-        document.getElementById("stopBtn").style.display = "none";
-        document.getElementById("extractTranslateBtn").disabled = false;
+        const stopBtn = document.getElementById("stopBtn");
+        if (stopBtn) stopBtn.style.display = "none";
+        const extractTranslateBtn = document.getElementById("extractTranslateBtn");
+        if (extractTranslateBtn) extractTranslateBtn.disabled = false;
         hideLoading();
         document.getElementById("progressContainer").style.display = "none";
         showNotification("অনুবাদ বন্ধ করা হয়েছে!", 'info');
@@ -997,8 +1177,10 @@ function speakText() {
 
         isSpeaking = true;
         const ttsButton = document.getElementById("ttsButton");
-        ttsButton.innerHTML = '<i class="fas fa-stop"></i> থামুন';
-        ttsButton.classList.add("tts-active");
+        if (ttsButton) {
+            ttsButton.innerHTML = '<i class="fas fa-stop"></i> থামুন';
+            ttsButton.classList.add("tts-active");
+        }
 
         utterance.onend = function () {
             stopSpeech();
@@ -1031,7 +1213,6 @@ function stopSpeech() {
 // ==================== HISTORY FUNCTIONS ====================
 
 function saveToHistory() {
-    // Get the full, current texts to save
     const fullArabicText = document.getElementById("arabicText").value;
     const fullBanglaText = document.getElementById("banglaText").value;
     
@@ -1041,20 +1222,15 @@ function saveToHistory() {
     const newItem = {
         id: Date.now(),
         title: currentFile?.name || "অনুবাদ",
-        // Save the full text
         fullArabicText: fullArabicText,
         fullBanglaText: fullBanglaText,
-        // Save truncated versions for preview in the history grid
         previewArabicText: fullArabicText.substring(0, 200) + (fullArabicText.length > 200 ? "..." : ""),
         previewBanglaText: fullBanglaText.substring(0, 200) + (fullBanglaText.length > 200 ? "..." : ""),
         date: new Date().toLocaleDateString("bn-BD"),
     };
 
     history.unshift(newItem);
-    // Keep history size manageable (e.g., max 20 items)
-    if (history.length > 20) {
-        history.pop();
-    }
+    if (history.length > 20) history.pop();
     localStorage.setItem("translationHistory", JSON.stringify(history));
     loadHistory();
 }
@@ -1092,14 +1268,14 @@ function loadHistoryItem(id) {
     const item = history.find((h) => h.id === id);
 
     if (item) {
-        // FIXED: Use the full text fields from the history item
         document.getElementById("arabicText").value = item.fullArabicText || "";
         document.getElementById("banglaText").value = item.fullBanglaText || "";
         
-        // Reset current file state as it's from history, not a new file upload
         currentFile = null; 
-        document.getElementById("pdfFile").value = ""; 
-        document.getElementById("fileInfo").style.display = "none";
+        const pdfInput = document.getElementById("pdfFile");
+        if (pdfInput) pdfInput.value = ""; 
+        const fileInfo = document.getElementById("fileInfo");
+        if (fileInfo) fileInfo.style.display = "none";
 
         showTab("translate");
         showNotification("ইতিহাস থেকে লোড করা হয়েছে!", 'success');
@@ -1131,10 +1307,12 @@ function clearAllHistory() {
 
 function clearAll() {
     stopTranslation();
-    document.getElementById("pdfFile").value = "";
+    const pdfInput = document.getElementById("pdfFile");
+    if (pdfInput) pdfInput.value = "";
     document.getElementById("arabicText").value = "";
     document.getElementById("banglaText").value = "";
-    document.getElementById("fileInfo").style.display = "none";
+    const fileInfo = document.getElementById("fileInfo");
+    if (fileInfo) fileInfo.style.display = "none";
     document.getElementById("progressContainer").style.display = "none";
     currentFile = null;
     extractedText = "";
