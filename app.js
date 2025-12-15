@@ -16,6 +16,58 @@ const ENCRYPTION_KEY = 'al-bayan-secure-key-2025-32chars!!';
 
 console.log("Al Bayan App Initializing...");
 
+// ==================== GEMINI RATE LIMIT / SANITIZER HELPERS ====================
+// (Added to avoid flooding the API and to remove model debug tokens from output)
+let geminiActiveRequests = 0;
+let lastGeminiRequestTs = 0;
+const GEMINI_MAX_CONCURRENT = 1;      // max parallel requests to Gemini
+const GEMINI_MIN_DELAY_MS = 800;     // minimum delay between requests (ms)
+
+async function waitForGeminiSlot() {
+    // simple concurrency + pacing
+    while (geminiActiveRequests >= GEMINI_MAX_CONCURRENT) {
+        await delay(100);
+    }
+    const now = Date.now();
+    const sinceLast = now - lastGeminiRequestTs;
+    if (sinceLast < GEMINI_MIN_DELAY_MS) {
+        await delay(GEMINI_MIN_DELAY_MS - sinceLast);
+    }
+    geminiActiveRequests++;
+}
+
+function releaseGeminiSlot() {
+    geminiActiveRequests = Math.max(0, geminiActiveRequests - 1);
+    lastGeminiRequestTs = Date.now();
+}
+
+function sanitizeModelNoise(text) {
+    if (!text || typeof text !== 'string') return text || '';
+
+    // Remove explicit tokens like MAX_TOKENS
+    let out = text.replace(/\bMAX_TOKENS\b/gi, '');
+
+    // Remove model names (gemini-2.5-flash etc.)
+    out = out.replace(/\bgemini-[\w.-]+\b/gi, '');
+
+    // Remove long alpha-numeric tokens (likely trace ids / debug tokens).
+    // This targets tokens of 8+ ASCII letters/numbers/underscore/dash.
+    // It will NOT remove Arabic/Bengali text because those use different unicode ranges.
+    out = out.replace(/\b[A-Za-z0-9_-]{8,}\b/g, '');
+
+    // Remove leftover double spaces/newlines produced by removals and trim
+    out = out.replace(/[ \t]{2,}/g, ' ');
+    out = out.replace(/\n{3,}/g, '\n\n');
+    out = out.replace(/^\s+|\s+$/g, '');
+
+    // Remove isolated punctuation remnants like " :" or " ,"
+    out = out.replace(/\s+([.,:;!?])/g, '$1');
+
+    return out;
+}
+
+console.log("Al Bayan App Initializing...");
+
 // Initialize the application
 document.addEventListener("DOMContentLoaded", function () {
     console.log("DOM Content Loaded");
@@ -565,7 +617,7 @@ async function extractWithOCRAndTranslate(file) {
     }
 }
 
-// Proper translateWithGemini function (IMPROVED PARSER + DEBUGGING)
+// --- Updated translateWithGemini using rate-limited fetch + sanitizer ---
 async function translateWithGemini(text, isTest = false) {
     try {
         if (!GEMINI_API_KEY) {
@@ -589,25 +641,32 @@ async function translateWithGemini(text, isTest = false) {
                 }
             ],
             generationConfig: {
-                // keep temperature low for accurate translation
                 temperature: 0.2,
                 maxOutputTokens: 1000
             }
         };
 
-        const response = await fetch(apiUrl, {
-            method: "POST",
-            headers: {
-                "Content-Type": "application/json",
-            },
-            body: JSON.stringify(requestBody),
-        });
+        // Rate-limited send
+        await waitForGeminiSlot();
+        let response;
+        try {
+            response = await fetch(apiUrl, {
+                method: "POST",
+                headers: {
+                    "Content-Type": "application/json",
+                },
+                body: JSON.stringify(requestBody),
+            });
+        } finally {
+            // don't release slot until after we record timestamp in success/failure branch
+        }
 
         if (!response.ok) {
-            // try to capture text body for debugging
             const rawErr = await response.text().catch(() => null);
             let errorData = null;
             try { errorData = JSON.parse(rawErr); } catch (e) { errorData = null; }
+
+            releaseGeminiSlot();
 
             if (response.status === 429) {
                 throw new Error('API_QUOTA_EXCEEDED');
@@ -618,22 +677,25 @@ async function translateWithGemini(text, isTest = false) {
             }
         }
 
-        // attempt to parse JSON, otherwise capture raw text
+        // parse JSON (or raw)
         let data;
         try {
             data = await response.json();
         } catch (e) {
-            const raw = await response.text().catch(() => null);
-            console.debug("Gemini response (non-json):", raw);
-            data = raw;
+            data = await response.text().catch(() => null);
+            console.debug("Gemini response (non-json):", data);
         }
+
+        // mark we finished the request
+        releaseGeminiSlot();
+
         console.debug("Gemini raw response:", data);
 
         if (isTest) {
             return "API_TEST_SUCCESS";
         }
 
-        // Recursive extraction helper that crawls the full response object and collects string values
+        // Robust recursive extractor
         function extractText(obj, collected = []) {
             if (!obj) return collected;
             if (typeof obj === 'string') {
@@ -642,15 +704,12 @@ async function translateWithGemini(text, isTest = false) {
                 return collected;
             }
             if (Array.isArray(obj)) {
-                for (const item of obj) {
-                    extractText(item, collected);
-                }
+                for (const item of obj) extractText(item, collected);
                 return collected;
             }
             if (typeof obj === 'object') {
                 for (const key of Object.keys(obj)) {
                     const val = obj[key];
-                    // Prioritize common fields
                     if (key === 'text' || key === 'output_text') {
                         if (typeof val === 'string' && val.trim()) {
                             collected.push(val.trim());
@@ -667,7 +726,6 @@ async function translateWithGemini(text, isTest = false) {
                         }
                         continue;
                     }
-                    // generic recursion
                     extractText(val, collected);
                 }
                 return collected;
@@ -678,12 +736,15 @@ async function translateWithGemini(text, isTest = false) {
         let translatedText = "";
         try {
             const pieces = extractText(data);
-            // filter tiny noise and join the reasonable pieces
             const filtered = pieces.filter(p => typeof p === 'string' && p.length > 8);
             translatedText = (filtered.join("\n\n") || pieces.join("\n\n") || "").trim();
         } catch (e) {
             console.warn("translateWithGemini: extractor failed", e);
+            translatedText = "";
         }
+
+        // sanitize model debug tokens / IDs that sometimes are embedded in text
+        translatedText = sanitizeModelNoise(translatedText);
 
         if (!translatedText) {
             console.warn("translateWithGemini: Could not extract translated text from response. Full response logged above.");
