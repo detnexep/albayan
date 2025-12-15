@@ -565,7 +565,7 @@ async function extractWithOCRAndTranslate(file) {
     }
 }
 
-// Proper translateWithGemini function
+// Proper translateWithGemini function (IMPROVED PARSER + DEBUGGING)
 async function translateWithGemini(text, isTest = false) {
     try {
         if (!GEMINI_API_KEY) {
@@ -574,8 +574,8 @@ async function translateWithGemini(text, isTest = false) {
 
         const apiUrl = `${GEMINI_API_URL}?key=${GEMINI_API_KEY}`;
 
-        // keep the text reasonably sized for a single request
-        const safeText = (typeof text === 'string') ? text.substring(0, 4000) : '';
+        // increase substring length to reduce accidental truncation
+        const safeText = (typeof text === 'string') ? text.substring(0, 15000) : '';
 
         const requestBody = {
             contents: [
@@ -589,7 +589,7 @@ async function translateWithGemini(text, isTest = false) {
                 }
             ],
             generationConfig: {
-                // Using 2.5 Flash defaults which are fine, but keeping temperature low for accurate translation
+                // keep temperature low for accurate translation
                 temperature: 0.2,
                 maxOutputTokens: 1000
             }
@@ -604,89 +604,89 @@ async function translateWithGemini(text, isTest = false) {
         });
 
         if (!response.ok) {
-            const errorData = await response.json().catch(() => null);
+            // try to capture text body for debugging
+            const rawErr = await response.text().catch(() => null);
+            let errorData = null;
+            try { errorData = JSON.parse(rawErr); } catch (e) { errorData = null; }
 
             if (response.status === 429) {
                 throw new Error('API_QUOTA_EXCEEDED');
             } else if (response.status === 401 || response.status === 403) {
                 throw new Error('INVALID_API_KEY');
             } else {
-                throw new Error(errorData?.error?.message || `API Error: ${response.status}`);
+                throw new Error(errorData?.error?.message || `API Error: ${response.status} ${rawErr || ''}`);
             }
         }
 
-        const data = await response.json().catch(() => null);
+        // attempt to parse JSON, otherwise capture raw text
+        let data;
+        try {
+            data = await response.json();
+        } catch (e) {
+            const raw = await response.text().catch(() => null);
+            console.debug("Gemini response (non-json):", raw);
+            data = raw;
+        }
         console.debug("Gemini raw response:", data);
-
-        // Try to robustly extract the translated text from multiple possible response shapes
-        let translatedText = "";
-
-        // 1) candidates -> content -> parts -> text
-        if (!translatedText && data?.candidates && data.candidates.length) {
-            const cand = data.candidates[0];
-            if (cand) {
-                // candidate.content might be array of content blocks
-                if (Array.isArray(cand.content)) {
-                    for (const block of cand.content) {
-                        if (!translatedText && block?.type === "output_text" && block?.text) {
-                            translatedText = block.text;
-                        } else if (!translatedText && block?.parts) {
-                            translatedText = block.parts.map(p => p.text || "").join("");
-                        } else if (!translatedText && block?.text) {
-                            translatedText = block.text;
-                        }
-                        if (translatedText) break;
-                    }
-                } else {
-                    // single object
-                    translatedText = cand.content?.parts?.map(p => p.text || "").join("") || cand.content?.text || "";
-                }
-            }
-        }
-
-        // 2) outputs (some responses use outputs array)
-        if (!translatedText && data?.outputs && data.outputs.length) {
-            const out = data.outputs[0];
-            if (out?.content) {
-                if (Array.isArray(out.content)) {
-                    for (const c of out.content) {
-                        if (!translatedText && (c?.type === "output_text" && c?.text)) {
-                            translatedText = c.text;
-                        } else if (!translatedText && c?.parts) {
-                            translatedText = c.parts.map(p => p.text || "").join("");
-                        } else if (!translatedText && c?.text) {
-                            translatedText = c.text;
-                        }
-                        if (translatedText) break;
-                    }
-                } else {
-                    translatedText = out.content?.parts?.map(p => p.text || "").join("") || out.content?.text || "";
-                }
-            }
-        }
-
-        // 3) legacy 'output' / 'output[0].content.text'
-        if (!translatedText && data?.output && data.output.length) {
-            translatedText = data.output[0]?.content?.text || "";
-        }
-
-        // 4) fallback common fields
-        if (!translatedText && data?.candidates?.[0]?.content?.parts?.[0]?.text) {
-            translatedText = data.candidates[0].content.parts[0].text;
-        }
-        if (!translatedText && data?.result?.outputs && data.result.outputs[0]?.content?.text) {
-            translatedText = data.result.outputs[0].content.text;
-        }
-
-        translatedText = (translatedText || "").trim();
 
         if (isTest) {
             return "API_TEST_SUCCESS";
         }
 
-        // If still empty, warn and return empty string (caller will handle fallback)
+        // Recursive extraction helper that crawls the full response object and collects string values
+        function extractText(obj, collected = []) {
+            if (!obj) return collected;
+            if (typeof obj === 'string') {
+                const t = obj.trim();
+                if (t) collected.push(t);
+                return collected;
+            }
+            if (Array.isArray(obj)) {
+                for (const item of obj) {
+                    extractText(item, collected);
+                }
+                return collected;
+            }
+            if (typeof obj === 'object') {
+                for (const key of Object.keys(obj)) {
+                    const val = obj[key];
+                    // Prioritize common fields
+                    if (key === 'text' || key === 'output_text') {
+                        if (typeof val === 'string' && val.trim()) {
+                            collected.push(val.trim());
+                            continue;
+                        }
+                    }
+                    if (key === 'parts' && Array.isArray(val)) {
+                        for (const p of val) {
+                            if (p && typeof p.text === 'string' && p.text.trim()) {
+                                collected.push(p.text.trim());
+                            } else {
+                                extractText(p, collected);
+                            }
+                        }
+                        continue;
+                    }
+                    // generic recursion
+                    extractText(val, collected);
+                }
+                return collected;
+            }
+            return collected;
+        }
+
+        let translatedText = "";
+        try {
+            const pieces = extractText(data);
+            // filter tiny noise and join the reasonable pieces
+            const filtered = pieces.filter(p => typeof p === 'string' && p.length > 8);
+            translatedText = (filtered.join("\n\n") || pieces.join("\n\n") || "").trim();
+        } catch (e) {
+            console.warn("translateWithGemini: extractor failed", e);
+        }
+
         if (!translatedText) {
-            console.warn("translateWithGemini: Could not extract translated text from response.");
+            console.warn("translateWithGemini: Could not extract translated text from response. Full response logged above.");
             return "";
         }
 
