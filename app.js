@@ -1,1359 +1,1163 @@
-// Global variables
-let extractedText = "";
-let selectedPdfType = "text";
-let tesseractWorker = null;
-let currentFile = null;
-let isSpeaking = false;
-let speechSynthesis = window.speechSynthesis;
-let GEMINI_API_KEY = "";
+// ╔══════════════════════════════════════════════════════════════╗
+// ║  AL BAYAN  ·  app.js                                         ║
+// ║  All bugs fixed, download added, new UI wired up             ║
+// ╚══════════════════════════════════════════════════════════════╝
+
+"use strict";
+
+// ── FIX 1: Configure PDF.js worker immediately ─────────────────
+if (typeof pdfjsLib !== "undefined") {
+  pdfjsLib.GlobalWorkerOptions.workerSrc =
+    "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.4.120/pdf.worker.min.js";
+}
+
+// ── Global state ───────────────────────────────────────────────
+let extractedArabicText = "";
+let selectedPdfType     = "text";
+let tesseractWorker     = null;
+let currentFile         = null;
+let isSpeaking          = false;
+let GEMINI_API_KEY      = "";
 let isTranslationRunning = false;
 
-// Gemini API Configuration
-const GEMINI_API_URL = "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent";
-// Encryption Key
-const ENCRYPTION_KEY = 'al-bayan-secure-key-2025-32chars!!';
+// ── Gemini API ──────────────────────────────────────────────────
+const GEMINI_API_URL =
+  "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent";
 
-console.log("Al Bayan App Initializing...");
+const ENCRYPTION_KEY = "al-bayan-secure-key-2025-32chars!!";
 
-// ==================== GEMINI RATE LIMIT / SANITIZER / BATCH HELPERS ====================
-// Prevent flooding the Gemini API and reduce token waste by batching pages.
-
+// ── Rate-limit / retry constants ────────────────────────────────
 let geminiActiveRequests = 0;
-let lastGeminiRequestTs = 0;
+let lastGeminiRequestTs  = 0;
 
-// Tuning constants (adjust to your quota/needs)
-const GEMINI_MAX_CONCURRENT = 1;      // Max parallel requests to Gemini
-const GEMINI_MIN_DELAY_MS = 800;     // Minimum delay between requests (ms)
+const GEMINI_MAX_CONCURRENT = 1;
+const GEMINI_MIN_DELAY_MS   = 800;
+const MAX_CHARS_PER_REQUEST = 8000;
+const MAX_RETRIES           = 5;
+const INITIAL_BACKOFF_MS    = 1000;
+const BACKOFF_MULTIPLIER    = 2;
+const JITTER_MS             = 300;
 
-const MAX_CHARS_PER_REQUEST = 8000;   // Approx max input chars per request (tune down if needed)
-const MAX_RETRIES = 5;
-const INITIAL_BACKOFF_MS = 1000;
-const BACKOFF_MULTIPLIER = 2;
-const JITTER_MS = 300;
+// ══════════════════════════════════════════════════════════════════
+// HELPERS
+// ══════════════════════════════════════════════════════════════════
 
-// ✅ FIXED: Moved delay() to top for proper hoisting
 function delay(ms) {
-    return new Promise((resolve) => setTimeout(resolve, ms));
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 async function waitForGeminiSlot() {
-    // Simple concurrency + pacing
-    while (geminiActiveRequests >= GEMINI_MAX_CONCURRENT) {
-        await delay(100);
-    }
-    const now = Date.now();
-    const sinceLast = now - lastGeminiRequestTs;
-    if (sinceLast < GEMINI_MIN_DELAY_MS) {
-        await delay(GEMINI_MIN_DELAY_MS - sinceLast);
-    }
-    geminiActiveRequests++;
+  while (geminiActiveRequests >= GEMINI_MAX_CONCURRENT) {
+    await delay(100);
+  }
+  const sinceLast = Date.now() - lastGeminiRequestTs;
+  if (sinceLast < GEMINI_MIN_DELAY_MS) {
+    await delay(GEMINI_MIN_DELAY_MS - sinceLast);
+  }
+  geminiActiveRequests++;
 }
 
 function releaseGeminiSlot() {
-    geminiActiveRequests = Math.max(0, geminiActiveRequests - 1);
-    lastGeminiRequestTs = Date.now();
+  geminiActiveRequests = Math.max(0, geminiActiveRequests - 1);
+  lastGeminiRequestTs  = Date.now();
 }
 
-// ✅ FIXED: Improved sanitizeModelNoise to preserve Bengali/Arabic text
+// ── FIX 2: Improved sanitizeModelNoise ──────────────────────────
+// Only strips known model artefacts; never touches Bengali/Arabic.
 function sanitizeModelNoise(text) {
-    if (!text || typeof text !== 'string') return text || '';
-
-    // Remove explicit tokens like MAX_TOKENS
-    let out = text.replace(/\bMAX_TOKENS\b/gi, '');
-
-    // Remove model names (gemini-2.5-flash etc.)
-    out = out.replace(/\bgemini-[\w.-]+\b/gi, '');
-
-    // ✅ IMPROVED: Only remove ASCII debug tokens, preserve Bengali/Arabic
-    // This regex only matches ASCII-only tokens of 8+ characters
-    // It won't match mixed ASCII+Unicode or pure Unicode (Bengali/Arabic)
-    out = out.replace(/\b[A-Za-z0-9_-]{8,}\b(?![^\x00-\x7F])/g, '');
-
-    // Remove leftover double spaces/newlines produced by removals and trim
-    out = out.replace(/[ \t]{2,}/g, ' ');
-    out = out.replace(/\n{3,}/g, '\n\n');
-    out = out.replace(/^\s+|\s+$/g, '');
-
-    // Remove isolated punctuation remnants like " :" or " ,"
-    out = out.replace(/\s+([.,:;!?])/g, '$1');
-
-    return out;
+  if (!text || typeof text !== "string") return text || "";
+  let out = text;
+  out = out.replace(/\bMAX_TOKENS\b/gi, "");
+  out = out.replace(/\bgemini-[\w.-]+\b/gi, "");
+  // Only remove pure-ASCII tokens (≥8 chars) NOT followed by a non-ASCII char
+  // Use word-boundary that respects ASCII only:
+  out = out.replace(/(?<![^\x00-\x7F])[A-Za-z0-9_-]{8,}(?![^\x00-\x7F])/g, (match) => {
+    // Keep known Bengali/Arabic-adjacent tokens; only remove if purely alphanumeric noise
+    if (/^[A-Z0-9_-]+$/.test(match)) return "";
+    return match;
+  });
+  out = out.replace(/[ \t]{2,}/g, " ");
+  out = out.replace(/\n{3,}/g, "\n\n");
+  out = out.replace(/\s+([.,:;!?])/g, "$1");
+  return out.trim();
 }
 
-// requestWithRetries: sends POST to Gemini with retries for 429/503, respects Retry-After
+// ── Shared response text extractor ──────────────────────────────
+// FIX 3: Single shared helper (was duplicated in batchTranslatePages + translateWithGemini)
+function extractTextFromResponse(obj, collected = []) {
+  if (!obj) return collected;
+  if (typeof obj === "string") {
+    const t = obj.trim();
+    if (t) collected.push(t);
+    return collected;
+  }
+  if (Array.isArray(obj)) {
+    for (const item of obj) extractTextFromResponse(item, collected);
+    return collected;
+  }
+  if (typeof obj === "object") {
+    for (const key of Object.keys(obj)) {
+      const val = obj[key];
+      if (key === "text" || key === "output_text") {
+        if (typeof val === "string" && val.trim()) {
+          collected.push(val.trim());
+          continue;
+        }
+      }
+      if (key === "parts" && Array.isArray(val)) {
+        for (const part of val) {
+          if (part && typeof part.text === "string" && part.text.trim()) {
+            collected.push(part.text.trim());
+          } else {
+            extractTextFromResponse(part, collected);
+          }
+        }
+        continue;
+      }
+      extractTextFromResponse(val, collected);
+    }
+  }
+  return collected;
+}
+
+// ══════════════════════════════════════════════════════════════════
+// GEMINI NETWORK
+// ══════════════════════════════════════════════════════════════════
+
 async function requestWithRetries(apiUrl, requestBody) {
-    let attempt = 0;
-    let backoff = INITIAL_BACKOFF_MS;
+  let attempt = 0;
+  let backoff  = INITIAL_BACKOFF_MS;
 
-    while (attempt <= MAX_RETRIES) {
-        attempt++;
-        await waitForGeminiSlot();
-        let response;
-        try {
-            response = await fetch(apiUrl, {
-                method: "POST",
-                headers: { "Content-Type": "application/json" },
-                body: JSON.stringify(requestBody),
-            });
-        } catch (networkErr) {
-            // network-level error; apply backoff and retry
-            releaseGeminiSlot();
-            if (attempt > MAX_RETRIES) throw networkErr;
-            const jitter = Math.floor(Math.random() * JITTER_MS);
-            await delay(backoff + jitter);
-            backoff *= BACKOFF_MULTIPLIER;
-            continue;
-        }
-
-        // success path for 2xx
-        if (response.ok) {
-            let data;
-            try {
-                data = await response.json();
-            } catch (e) {
-                data = await response.text().catch(() => null);
-            }
-            releaseGeminiSlot();
-            return data;
-        }
-
-        // non-OK path
-        const retryAfter = response.headers.get('Retry-After');
-        let waitMs = 0;
-        if (retryAfter) {
-            const seconds = parseInt(retryAfter, 10);
-            if (!isNaN(seconds)) {
-                waitMs = seconds * 1000;
-            } else {
-                const then = Date.parse(retryAfter);
-                if (!isNaN(then)) {
-                    const diff = then - Date.now();
-                    waitMs = Math.max(0, diff);
-                }
-            }
-        }
-
-        const status = response.status;
-        const rawBody = await response.text().catch(() => null);
-        let errObj = null;
-        try { errObj = JSON.parse(rawBody); } catch (e) { errObj = null; }
-
-        releaseGeminiSlot();
-
-        // handle retryable statuses
-        if ((status === 429 || status === 503) && attempt <= MAX_RETRIES) {
-            if (waitMs > 0) {
-                await delay(waitMs + Math.floor(Math.random() * JITTER_MS));
-            } else {
-                const jitter = Math.floor(Math.random() * JITTER_MS);
-                await delay(backoff + jitter);
-                backoff *= BACKOFF_MULTIPLIER;
-            }
-            continue;
-        }
-
-        // non-retryable or max retries reached -> throw
-        const message = errObj?.error?.message || rawBody || `API Error: ${status}`;
-        const e = new Error(message);
-        e.status = status;
-        throw e;
-    }
-
-    throw new Error("Max retries exceeded for Gemini request");
-}
-
-// Helper: builds a single combined prompt for a batch of pages, asks for page-labeled translations
-function buildBatchPrompt(pages) {
-    // pages: [{pageNumber, text}, ...]
-    const sentinel = '---PAGE_BREAK---';
-    let promptParts = [];
-    promptParts.push(`You are to translate Arabic Islamic text to Bangla. Preserve Islamic meaning accurately and do not add commentary.`);
-    promptParts.push(`For each page provided, output the Bangla translation only. Separate each page's translation with the exact sentinel token: ${sentinel}`);
-    promptParts.push(`Also prefix each translation with "PAGE:{pageNumber}" so we can map translations back to pages. Example output format:`);
-    promptParts.push(`PAGE:1\n<bangla translation for page1>\n${sentinel}\nPAGE:2\n<bangla translation for page2>\n${sentinel}\n...`);
-    promptParts.push(`Now translate the following pages in order:`);
-
-    for (const p of pages) {
-        promptParts.push(`PAGE:${p.pageNumber}\n${p.text}\n`);
-    }
-
-    return promptParts.join("\n\n");
-}
-
-// ✅ FIXED: Improved batchTranslatePages with better error handling and logging
-async function batchTranslatePages(pages) {
-    if (!pages || pages.length === 0) return {};
-
-    const apiUrl = `${GEMINI_API_URL}?key=${GEMINI_API_KEY}`;
-    const sentinel = '---PAGE_BREAK---';
-    const prompt = buildBatchPrompt(pages);
-
-    const requestBody = {
-        contents: [
-            {
-                role: "user",
-                parts: [{ text: prompt }]
-            }
-        ],
-        generationConfig: {
-            temperature: 0.2,
-            maxOutputTokens: 2000
-        }
-    };
-
-    const rawResponse = await requestWithRetries(apiUrl, requestBody);
-    console.debug("Gemini raw response (batch):", rawResponse);
-
-    // Extract strings from response object
-    function extractTextFromData(obj, collected = []) {
-        if (!obj) return collected;
-        if (typeof obj === 'string') {
-            const t = obj.trim();
-            if (t) collected.push(t);
-            return collected;
-        }
-        if (Array.isArray(obj)) {
-            for (const it of obj) extractTextFromData(it, collected);
-            return collected;
-        }
-        if (typeof obj === 'object') {
-            for (const k of Object.keys(obj)) {
-                const v = obj[k];
-                if (k === 'text' || k === 'output_text') {
-                    if (typeof v === 'string' && v.trim()) collected.push(v.trim());
-                    continue;
-                }
-                if (k === 'parts' && Array.isArray(v)) {
-                    for (const p of v) {
-                        if (p && typeof p.text === 'string' && p.text.trim()) collected.push(p.text.trim());
-                        else extractTextFromData(p, collected);
-                    }
-                    continue;
-                }
-                extractTextFromData(v, collected);
-            }
-            return collected;
-        }
-        return collected;
-    }
-
-    const pieces = extractTextFromData(rawResponse);
-    console.log("📋 Extracted pieces:", pieces); // ✅ Debug logging
-
-    let joined = (pieces.join("\n\n") || "").trim();
-    console.log("📝 Before sanitize:", joined.substring(0, 200)); // ✅ Debug logging
-    
-    joined = sanitizeModelNoise(joined);
-    console.log("✨ After sanitize:", joined.substring(0, 200)); // ✅ Debug logging
-
-    const resultMap = {}; // pageNumber => translation
-    
-    // ✅ FIXED: Better handling of empty responses
-    if (!joined || joined.length === 0) {
-        console.warn("⚠️ No translation text extracted from Gemini response!");
-        return resultMap;
-    }
-
-    // split by sentinel
-    const segments = joined.split(sentinel).map(s => s.trim()).filter(s => s.length > 0);
-    console.log("🔄 Segments after split:", segments.length); // ✅ Debug logging
-
-    // ✅ FIXED: Try to match PAGE: prefix
-    for (const seg of segments) {
-        // find PAGE:<num> prefix
-        const m = seg.match(/^PAGE\s*:\s*(\d+)\s*\n?([\s\S]*)$/i);
-        if (m) {
-            const pn = parseInt(m[1], 10);
-            const text = m[2] ? m[2].trim() : "";
-            if (pn && text) {
-                resultMap[pn] = text;
-                console.log(`✅ Mapped page ${pn} with ${text.length} chars`); // ✅ Debug
-                continue;
-            }
-        }
-    }
-
-    // ✅ FIXED: If tags absent or incomplete, attempt sequential mapping
-    if (Object.keys(resultMap).length === 0) {
-        console.warn("⚠️ PAGE:# tags not found. Using sequential mapping."); // ✅ Debug
-        for (let i = 0; i < segments.length && i < pages.length; i++) {
-            resultMap[pages[i].pageNumber] = segments[i];
-            console.log(`✅ Sequential mapped page ${pages[i].pageNumber}`); // ✅ Debug
-        }
-    } else {
-        // Fill in missing pages with empty string
-        for (const p of pages) {
-            if (!resultMap[p.pageNumber]) resultMap[p.pageNumber] = "";
-        }
-    }
-
-    console.log("📊 Final resultMap:", Object.keys(resultMap)); // ✅ Debug logging
-    return resultMap;
-}
-
-// Simple single-page wrapper (keeps compatibility for small direct calls)
-async function translateWithGemini(text, isTest = false) {
+  while (attempt <= MAX_RETRIES) {
+    attempt++;
+    await waitForGeminiSlot();
+    let response;
     try {
-        if (!GEMINI_API_KEY) {
-            throw new Error('API_KEY_MISSING');
-        }
-        const apiUrl = `${GEMINI_API_URL}?key=${GEMINI_API_KEY}`;
-        const safeText = (typeof text === 'string') ? text.substring(0, 15000) : '';
-
-        const requestBody = {
-            contents: [
-                {
-                    role: "user",
-                    parts: [
-                        {
-                            text: `Translate this Arabic Islamic text to Bangla. Preserve Islamic meaning accurately. Only return the Bangla translation.\n\n${safeText}`
-                        }
-                    ]
-                }
-            ],
-            generationConfig: {
-                temperature: 0.2,
-                maxOutputTokens: 1000
-            }
-        };
-
-        const rawResponse = await requestWithRetries(apiUrl, requestBody);
-        console.debug("Gemini raw response (single):", rawResponse);
-
-        if (isTest) return "API_TEST_SUCCESS";
-
-        // Extract text like batch
-        function extractText(obj, collected = []) {
-            if (!obj) return collected;
-            if (typeof obj === 'string') {
-                const t = obj.trim();
-                if (t) collected.push(t);
-                return collected;
-            }
-            if (Array.isArray(obj)) {
-                for (const item of obj) extractText(item, collected);
-                return collected;
-            }
-            if (typeof obj === 'object') {
-                for (const key of Object.keys(obj)) {
-                    const val = obj[key];
-                    if (key === 'text' || key === 'output_text') {
-                        if (typeof val === 'string' && val.trim()) {
-                            collected.push(val.trim());
-                            continue;
-                        }
-                    }
-                    if (key === 'parts' && Array.isArray(val)) {
-                        for (const p of val) {
-                            if (p && typeof p.text === 'string' && p.text.trim()) {
-                                collected.push(p.text.trim());
-                            } else {
-                                extractText(p, collected);
-                            }
-                        }
-                        continue;
-                    }
-                    extractText(val, collected);
-                }
-                return collected;
-            }
-            return collected;
-        }
-
-        const pieces = extractText(rawResponse);
-        const filtered = pieces.filter(p => typeof p === 'string' && p.length > 8);
-        let translated = (filtered.join("\n\n") || pieces.join("\n\n") || "").trim();
-        translated = sanitizeModelNoise(translated);
-        return translated || "";
-    } catch (error) {
-        console.error("Gemini API error:", error);
-        const errorMessages = {
-            'API_KEY_MISSING': 'API টি পাওয়া যায়নি। দয়া করে API টি সেট করুন।',
-            'API_QUOTA_EXCEEDED': 'API লিমিট শেষ হয়েছে। পরে চেষ্টা করুন।',
-            'INVALID_API_KEY': 'API টি ভুল। দয়া করে সঠিক API টি দিন।',
-            'NETWORK_ERROR': 'নেটওয়ার্ক সমস্যা। ইন্টারনেট সংযোগ চেক করুন।'
-        };
-        const userMessage = errorMessages[error.message] || `অনুবাদ ব্যর্থ: ${error.message}`;
-        showNotification(userMessage, 'error');
-        throw error;
+      response = await fetch(apiUrl, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(requestBody),
+      });
+    } catch (networkErr) {
+      releaseGeminiSlot();
+      if (attempt > MAX_RETRIES) throw networkErr;
+      await delay(backoff + Math.floor(Math.random() * JITTER_MS));
+      backoff *= BACKOFF_MULTIPLIER;
+      continue;
     }
+
+    if (response.ok) {
+      let data;
+      try { data = await response.json(); }
+      catch (e) { data = await response.text().catch(() => null); }
+      releaseGeminiSlot();
+      return data;
+    }
+
+    const retryAfter = response.headers.get("Retry-After");
+    let waitMs = 0;
+    if (retryAfter) {
+      const sec = parseInt(retryAfter, 10);
+      waitMs = isNaN(sec)
+        ? Math.max(0, Date.parse(retryAfter) - Date.now())
+        : sec * 1000;
+    }
+
+    const status  = response.status;
+    const rawBody = await response.text().catch(() => null);
+    let errObj = null;
+    try { errObj = JSON.parse(rawBody); } catch (_) {}
+
+    releaseGeminiSlot();
+
+    if ((status === 429 || status === 503) && attempt <= MAX_RETRIES) {
+      await delay(waitMs > 0
+        ? waitMs + Math.floor(Math.random() * JITTER_MS)
+        : backoff + Math.floor(Math.random() * JITTER_MS));
+      backoff *= BACKOFF_MULTIPLIER;
+      continue;
+    }
+
+    const message = errObj?.error?.message || rawBody || `API Error: ${status}`;
+    const err = new Error(message);
+    err.status = status;
+    throw err;
+  }
+  throw new Error("Max retries exceeded for Gemini request");
 }
 
-// ==================== BASIC UI / INIT FUNCTIONS ====================
+// ══════════════════════════════════════════════════════════════════
+// BATCH TRANSLATION
+// ══════════════════════════════════════════════════════════════════
 
-document.addEventListener("DOMContentLoaded", function () {
-    console.log("DOM Content Loaded");
-    initializeTheme();
-    loadApiKey();
-    setupEventListeners();
-    loadHistory();
-    initializeEnhancedFeatures();
-    showNotification("Al Bayan অ্যাপ্লিকেশন সফলভাবে লোড হয়েছে!", 'success');
+function buildBatchPrompt(pages) {
+  const SENTINEL = "---PAGE_BREAK---";
+  const parts = [
+    "You are to translate Arabic Islamic text to Bangla. Preserve Islamic meaning accurately. Do not add commentary.",
+    `For each page provided, output ONLY the Bangla translation separated by: ${SENTINEL}`,
+    `Prefix each translation with "PAGE:{pageNumber}". Example:`,
+    `PAGE:1\n<bangla for page 1>\n${SENTINEL}\nPAGE:2\n<bangla for page 2>\n${SENTINEL}`,
+    "Translate the following pages in order:",
+  ];
+  for (const p of pages) {
+    parts.push(`PAGE:${p.pageNumber}\n${p.text}\n`);
+  }
+  return parts.join("\n\n");
+}
+
+// ── FIX 4: Fixed batch result lookup ────────────────────────────
+// Returns { pageNumber: translatedText } for each page in the batch.
+async function batchTranslatePages(pages) {
+  if (!pages || pages.length === 0) return {};
+
+  const SENTINEL  = "---PAGE_BREAK---";
+  const apiUrl    = `${GEMINI_API_URL}?key=${GEMINI_API_KEY}`;
+  const prompt    = buildBatchPrompt(pages);
+
+  const requestBody = {
+    contents: [{ role: "user", parts: [{ text: prompt }] }],
+    generationConfig: { temperature: 0.2, maxOutputTokens: 2048 },
+  };
+
+  const rawResponse = await requestWithRetries(apiUrl, requestBody);
+
+  const pieces = extractTextFromResponse(rawResponse);
+  let joined   = sanitizeModelNoise(pieces.join("\n\n").trim());
+
+  const resultMap = {};
+  if (!joined) return resultMap;
+
+  const segments = joined.split(SENTINEL).map(s => s.trim()).filter(Boolean);
+
+  // Try PAGE: prefix mapping first
+  for (const seg of segments) {
+    const m = seg.match(/^PAGE\s*:\s*(\d+)\s*\n?([\s\S]*)$/i);
+    if (m) {
+      const pn   = parseInt(m[1], 10);
+      const text = m[2] ? m[2].trim() : "";
+      if (pn && text) resultMap[pn] = text;
+    }
+  }
+
+  // Fallback: sequential mapping if no PAGE: tags found
+  if (Object.keys(resultMap).length === 0) {
+    for (let i = 0; i < segments.length && i < pages.length; i++) {
+      resultMap[pages[i].pageNumber] = segments[i];
+    }
+  }
+
+  // Ensure every page in the batch has an entry
+  for (const p of pages) {
+    if (!resultMap[p.pageNumber]) resultMap[p.pageNumber] = "";
+  }
+
+  return resultMap;
+}
+
+// ── Single-page translation (test / fallback) ───────────────────
+async function translateWithGemini(text, isTest = false) {
+  if (!GEMINI_API_KEY) throw new Error("API_KEY_MISSING");
+
+  const apiUrl     = `${GEMINI_API_URL}?key=${GEMINI_API_KEY}`;
+  const safeText   = String(text).substring(0, 15000);
+  const requestBody = {
+    contents: [{
+      role: "user",
+      parts: [{
+        text: `Translate this Arabic Islamic text to Bangla. Preserve Islamic meaning. Only return the Bangla translation.\n\n${safeText}`
+      }],
+    }],
+    generationConfig: { temperature: 0.2, maxOutputTokens: 1024 },
+  };
+
+  const rawResponse = await requestWithRetries(apiUrl, requestBody);
+  if (isTest) return "API_TEST_SUCCESS";
+
+  const pieces     = extractTextFromResponse(rawResponse);
+  const filtered   = pieces.filter(p => typeof p === "string" && p.length > 8);
+  let translated   = sanitizeModelNoise((filtered.join("\n\n") || pieces.join("\n\n")).trim());
+  return translated || "";
+}
+
+// ══════════════════════════════════════════════════════════════════
+// INIT
+// ══════════════════════════════════════════════════════════════════
+
+document.addEventListener("DOMContentLoaded", () => {
+  initializeTheme();
+  loadApiKey();
+  setupFileInput();
+  setupDragAndDrop();
+  setupKeyboardShortcuts();
+  loadHistory();
+  showNotification("Al Bayan সফলভাবে লোড হয়েছে!", "success");
 });
 
-// Theme functionality
+// ══════════════════════════════════════════════════════════════════
+// THEME
+// ══════════════════════════════════════════════════════════════════
+
 function initializeTheme() {
-    const themeToggle = document.getElementById('themeToggle');
-    const savedTheme = localStorage.getItem("theme") || "dark";
+  const toggle     = document.getElementById("themeToggle");
+  const savedTheme = localStorage.getItem("albayan_theme") || "dark";
 
-    if (savedTheme === "dark") {
-        document.documentElement.setAttribute("data-theme", "dark");
-        if (themeToggle) themeToggle.checked = true;
-    }
+  applyTheme(savedTheme, toggle);
 
-    if (themeToggle) {
-        themeToggle.addEventListener("change", function () {
-            if (this.checked) {
-                document.documentElement.setAttribute("data-theme", "dark");
-                localStorage.setItem("theme", "dark");
-            } else {
-                document.documentElement.setAttribute("data-theme", "light");
-                localStorage.setItem("theme", "light");
-            }
-        });
-    }
+  toggle?.addEventListener("change", function () {
+    const theme = this.checked ? "dark" : "light";
+    applyTheme(theme, this);
+    localStorage.setItem("albayan_theme", theme);
+  });
 }
 
-// Event listeners
-function setupEventListeners() {
-    const pdfFileInput = document.getElementById('pdfFile');
-    if (pdfFileInput) {
-        pdfFileInput.addEventListener('change', function (e) {
-            const file = e.target.files[0];
-            if (!file) return;
-            currentFile = file;
-            displayFileInfo(file);
-        });
-    }
+function applyTheme(theme, toggle) {
+  document.documentElement.setAttribute("data-theme", theme);
+  if (toggle) toggle.checked = (theme === "dark");
 }
 
-// Display file information
-function displayFileInfo(file) {
-    const fileInfo = document.getElementById("fileInfo");
-    const fileName = document.getElementById("fileName");
-    const fileSize = document.getElementById("fileSize");
+// ══════════════════════════════════════════════════════════════════
+// TAB NAVIGATION — FIX 5: explicit element passed, no global event
+// ══════════════════════════════════════════════════════════════════
 
-    if (!fileInfo || !fileName || !fileSize) return;
+function showTab(tabName, clickedEl) {
+  // Hide all tab content panels
+  ["translate", "history", "library"].forEach(name => {
+    const el = document.getElementById(name + "-tab");
+    if (el) el.classList.add("hidden");
+  });
 
-    const fileSizeMB = (file.size / (1024 * 1024)).toFixed(2);
+  // Deactivate all nav tabs
+  document.querySelectorAll(".nav-tab").forEach(t => t.classList.remove("active"));
 
-    fileName.textContent = file.name;
-    fileSize.textContent = `আকার: ${fileSizeMB} MB`;
-    fileInfo.style.display = "block";
+  // Show selected tab
+  const target = document.getElementById(tabName + "-tab");
+  if (target) target.classList.remove("hidden");
 
-    if (file.size > 10 * 1024 * 1024) {
-        showNotification(`বড় ফাইল (${fileSizeMB} MB): প্রসেসিং বেশি সময় নিতে পারে।`, 'warning');
-    }
+  // Mark clicked tab as active
+  if (clickedEl) clickedEl.classList.add("active");
+
+  // Refresh history when switching to it
+  if (tabName === "history") loadHistory();
 }
 
-// PDF type selection
-function selectPdfType(type, event) {
-    selectedPdfType = type;
-    document.querySelectorAll(".pdf-type-option").forEach((opt) => {
-        opt.classList.remove("active");
-        opt.style.border = "2px solid transparent";
-    });
-    
-    if (event && event.currentTarget) {
-      const activeOption = event.currentTarget;
-      activeOption.classList.add("active");
-      activeOption.style.border = "2px solid #3E8999";
-    }
+// ══════════════════════════════════════════════════════════════════
+// FILE INPUT
+// ══════════════════════════════════════════════════════════════════
+
+function setupFileInput() {
+  const input = document.getElementById("pdfFile");
+  if (!input) return;
+  input.addEventListener("change", (e) => {
+    const file = e.target.files[0];
+    if (file) handleFileSelected(file);
+  });
 }
 
-// Update API Status
+function handleFileSelected(file) {
+  if (file.type !== "application/pdf") {
+    showNotification("শুধুমাত্র PDF ফাইল সমর্থিত।", "error");
+    return;
+  }
+  currentFile = file;
+
+  const badge = document.getElementById("fileBadge");
+  const name  = document.getElementById("fileName");
+  const size  = document.getElementById("fileSize");
+
+  const sizeMB = (file.size / 1048576).toFixed(2);
+  if (name) name.textContent = file.name;
+  if (size) size.textContent = `${sizeMB} MB`;
+  if (badge) badge.classList.add("show");
+
+  if (file.size > 10 * 1048576) {
+    showNotification(`বড় ফাইল (${sizeMB} MB): প্রসেসিং বেশি সময় নিতে পারে।`, "warning");
+  }
+}
+
+// ── FIX 6: selectPdfType — explicit element, no event dependency ─
+function selectPdfType(type, clickedEl) {
+  selectedPdfType = type;
+  document.querySelectorAll(".pdf-type-option").forEach(opt => opt.classList.remove("active"));
+  if (clickedEl) clickedEl.classList.add("active");
+}
+
+// ══════════════════════════════════════════════════════════════════
+// DRAG AND DROP
+// ══════════════════════════════════════════════════════════════════
+
+function setupDragAndDrop() {
+  const area = document.getElementById("fileUploadArea");
+  if (!area) return;
+
+  const prevent = (e) => { e.preventDefault(); e.stopPropagation(); };
+  ["dragenter","dragover","dragleave","drop"].forEach(ev => {
+    area.addEventListener(ev, prevent);
+    document.body.addEventListener(ev, prevent);
+  });
+
+  area.addEventListener("dragenter", () => area.classList.add("drag-over"));
+  area.addEventListener("dragover",  () => area.classList.add("drag-over"));
+  area.addEventListener("dragleave", () => area.classList.remove("drag-over"));
+  area.addEventListener("drop", (e) => {
+    area.classList.remove("drag-over");
+    const file = e.dataTransfer?.files?.[0];
+    if (file) {
+      handleFileSelected(file);
+      showNotification("PDF ফাইল সফলভাবে লোড হয়েছে!", "success");
+    }
+  });
+}
+
+// ══════════════════════════════════════════════════════════════════
+// KEYBOARD SHORTCUTS
+// ══════════════════════════════════════════════════════════════════
+
+function setupKeyboardShortcuts() {
+  document.addEventListener("keydown", (e) => {
+    const ctrl = e.ctrlKey || e.metaKey;
+
+    if (ctrl && e.key === "Enter") {
+      e.preventDefault();
+      if (!document.getElementById("extractTranslateBtn")?.disabled) {
+        extractAndTranslate();
+      }
+    }
+    if (e.key === "Escape") {
+      if (isTranslationRunning) stopTranslation();
+      if (document.getElementById("readerModal")?.classList.contains("open")) closeReader();
+    }
+    if (ctrl && e.key === "s") {
+      e.preventDefault();
+      saveCurrentTranslation();
+    }
+    if (ctrl && e.key === "d") {
+      e.preventDefault();
+      downloadTranslation();
+    }
+  });
+}
+
+// ══════════════════════════════════════════════════════════════════
+// API STATUS
+// ══════════════════════════════════════════════════════════════════
+
 function updateApiStatus(type, message) {
-    const statusDiv = document.getElementById("apiStatus");
-    if (statusDiv) {
-        statusDiv.className = `api-status ${type}`;
-        statusDiv.innerHTML = message;
-    }
+  const el = document.getElementById("apiStatus");
+  if (!el) return;
+  el.className = `status-banner ${type}`;
+  const icons = { success:"circle-check", error:"circle-xmark", warning:"triangle-exclamation", info:"circle-info" };
+  const icon  = icons[type] || "circle-info";
+  el.innerHTML = `<i class="fas fa-${icon}"></i><span>${message}</span>`;
 }
 
-// ==================== ENHANCED FEATURES ====================
+// ══════════════════════════════════════════════════════════════════
+// ENCRYPTION / API KEY MANAGER
+// ══════════════════════════════════════════════════════════════════
 
-// Enhanced Notification System
-function showNotification(message, type = 'info') {
-    console.log("Notification:", message, type);
-    
-    // Remove existing notifications
-    const existingNotifications = document.querySelectorAll('.custom-notification');
-    existingNotifications.forEach(notif => notif.remove());
-
-    const notification = document.createElement('div');
-    notification.className = `custom-notification ${type}`;
-    
-    const bgColor = type === 'error' ? '#dc3545' : 
-                    type === 'success' ? '#28a745' : 
-                    type === 'warning' ? '#ffc107' : '#17a2b8';
-    
-    notification.style.cssText = `
-        position: fixed;
-        top: 20px;
-        right: 20px;
-        padding: 15px 20px;
-        border-radius: 8px;
-        color: ${type === 'warning' ? 'black' : 'white'};
-        font-weight: 600;
-        z-index: 10000;
-        box-shadow: 0 4px 12px rgba(0,0,0,0.15);
-        background: ${bgColor};
-        display: flex;
-        align-items: center;
-        gap: 10px;
-        max-width: 400px;
-    `;
-    
-    const icon = type === 'error' ? 'exclamation-triangle' : 
-                 type === 'success' ? 'check-circle' : 
-                 type === 'warning' ? 'exclamation-circle' : 'info-circle';
-    
-    notification.innerHTML = `
-        <i class="fas fa-${icon}"></i>
-        <span>${message}</span>
-        <button onclick="this.parentElement.remove()" style="
-            background: none;
-            border: none;
-            color: inherit;
-            margin-left: 15px;
-            cursor: pointer;
-            font-size: 18px;
-        ">&times;</button>
-    `;
-    
-    document.body.appendChild(notification);
-    
-    setTimeout(() => {
-        if (notification.parentElement) {
-            notification.remove();
-        }
-    }, 5000);
+function encryptKey(key) {
+  try { return CryptoJS.AES.encrypt(key, ENCRYPTION_KEY).toString(); }
+  catch (_) { return null; }
 }
 
-// Encryption Functions
-function encryptWithCryptoJS(apiKey) {
-    try {
-        return CryptoJS.AES.encrypt(apiKey, ENCRYPTION_KEY).toString();
-    } catch (error) {
-        console.error('Encryption error:', error);
-        return null;
-    }
+function decryptKey(enc) {
+  try {
+    const bytes = CryptoJS.AES.decrypt(enc, ENCRYPTION_KEY);
+    return bytes.toString(CryptoJS.enc.Utf8) || null;
+  } catch (_) { return null; }
 }
 
-function decryptWithCryptoJS(encryptedKey) {
-    try {
-        const bytes = CryptoJS.AES.decrypt(encryptedKey, ENCRYPTION_KEY);
-        const decrypted = bytes.toString(CryptoJS.enc.Utf8);
-        return decrypted || null;
-    } catch (error) {
-        console.error('Decryption error:', error);
-        return null;
-    }
+function simpleHash(text) {
+  let h = 0;
+  for (let i = 0; i < text.length; i++) {
+    h = ((h << 5) - h + text.charCodeAt(i)) | 0;
+  }
+  return h.toString();
 }
 
-// API Key Manager
-class ApiKeyManager {
-    constructor() {
-        this.storageKey = 'encrypted_gemini_key_v2';
-    }
-    
-    saveApiKey(apiKey) {
-        if (!apiKey || apiKey.trim() === '') {
-            throw new Error('API key cannot be empty');
-        }
-        
-        apiKey = apiKey.trim().replace(/\s/g, '');
-        const encryptedKey = encryptWithCryptoJS(apiKey);
-        
-        if (!encryptedKey) {
-            throw new Error('Encryption failed');
-        }
-        
-        localStorage.setItem(this.storageKey, encryptedKey);
-        GEMINI_API_KEY = apiKey;
-        
-        const keyHash = this.generateHash(apiKey);
-        localStorage.setItem('api_key_hash', keyHash);
-        
-        return true;
-    }
-    
-    loadApiKey() {
-        try {
-            const encryptedKey = localStorage.getItem(this.storageKey);
-            if (!encryptedKey) return false;
-            
-            const decryptedKey = decryptWithCryptoJS(encryptedKey);
-            if (!decryptedKey) {
-                this.clearApiKey();
-                return false;
-            }
-            
-            const storedHash = localStorage.getItem('api_key_hash');
-            const currentHash = this.generateHash(decryptedKey);
-            
-            if (storedHash !== currentHash) {
-                console.warn('API key verification failed');
-                this.clearApiKey();
-                return false;
-            }
-            
-            GEMINI_API_KEY = decryptedKey;
-            return true;
-            
-        } catch (error) {
-            console.error('Error loading API key:', error);
-            return false;
-        }
-    }
-    
-    clearApiKey() {
-        localStorage.removeItem(this.storageKey);
-        localStorage.removeItem('api_key_hash');
-        GEMINI_API_KEY = '';
-    }
-    
-    generateHash(text) {
-        let hash = 0;
-        for (let i = 0; i < text.length; i++) {
-            const char = text.charCodeAt(i);
-            hash = ((hash << 5) - hash) + char;
-            hash = hash & hash;
-        }
-        return hash.toString();
-    }
-}
+const API_STORE_KEY = "albayan_encrypted_key_v2";
+const API_HASH_KEY  = "albayan_key_hash";
 
-const apiKeyManager = new ApiKeyManager();
-
-// API Key Functions
 function saveApiKey() {
-    const apiKeyInput = document.getElementById('apiKeyInput');
-    let apiKey = apiKeyInput.value.trim();
-    
-    if (apiKey === '••••••••••••••••') {
-        showNotification('API টি ইতিমধ্যে সংরক্ষিত আছে', 'info');
-        return;
-    }
-    
-    if (!apiKey) {
-        showNotification('দয়া করে API টি ইনপুট দিন', 'error');
-        return;
-    }
-    
-    try {
-        apiKeyManager.saveApiKey(apiKey);
-        apiKeyInput.value = '••••••••••••••••';
-        showNotification('✅ API টি সুরক্ষিতভাবে সংরক্ষণ করা হয়েছে!', 'success');
-        updateApiStatus('success', '✅ API টি সংরক্ষণ করা হয়েছে! আপনি এখন অনুবাদ করতে পারেন।');
-    } catch (error) {
-        showNotification('সংরক্ষণ ব্যর্থ: ' + error.message, 'error');
-    }
+  const input = document.getElementById("apiKeyInput");
+  let key = input?.value.trim().replace(/\s/g, "");
+
+  if (key === "••••••••••••••••") {
+    showNotification("API কী ইতিমধ্যে সংরক্ষিত।", "info");
+    return;
+  }
+  if (!key) {
+    showNotification("API কী ফাঁকা রাখা যাবে না।", "error");
+    return;
+  }
+
+  const enc = encryptKey(key);
+  if (!enc) { showNotification("এনক্রিপশন ব্যর্থ।", "error"); return; }
+
+  localStorage.setItem(API_STORE_KEY, enc);
+  localStorage.setItem(API_HASH_KEY,  simpleHash(key));
+  GEMINI_API_KEY = key;
+  if (input) input.value = "••••••••••••••••";
+  updateApiStatus("success", "✅ API কী সংরক্ষণ করা হয়েছে! আপনি এখন অনুবাদ করতে পারেন।");
+  showNotification("API কী সুরক্ষিতভাবে সংরক্ষণ করা হয়েছে!", "success");
 }
 
 function loadApiKey() {
-    const success = apiKeyManager.loadApiKey();
-    if (success) {
-        const input = document.getElementById('apiKeyInput');
-        if (input) input.value = '••••••••••••••••';
-        updateApiStatus('success', '✅ API টি লোড হয়েছে! আপনি এখন অনুবাদ করতে পারেন।');
+  try {
+    const enc = localStorage.getItem(API_STORE_KEY);
+    if (!enc) return false;
+    const key  = decryptKey(enc);
+    if (!key)  { clearApiKey(true); return false; }
+    if (simpleHash(key) !== localStorage.getItem(API_HASH_KEY)) {
+      clearApiKey(true); return false;
     }
-    return success;
+    GEMINI_API_KEY = key;
+    const input = document.getElementById("apiKeyInput");
+    if (input) input.value = "••••••••••••••••";
+    updateApiStatus("success", "✅ API কী লোড হয়েছে! আপনি এখন অনুবাদ করতে পারেন।");
+    return true;
+  } catch (_) { return false; }
 }
 
-function clearApiKey() {
-    if (confirm('আপনি কি নিশ্চিত যে API টি ডিলিট করতে চান?')) {
-        apiKeyManager.clearApiKey();
-        const input = document.getElementById('apiKeyInput');
-        if (input) input.value = '';
-        updateApiStatus('warning', '🔑 API টি প্রয়োজন। নিচে আপনার API টি দিন।');
-        showNotification('API টি ডিলিট করা হয়েছে', 'info');
-    }
+function clearApiKey(silent = false) {
+  if (!silent && !confirm("API কী ডিলিট করবেন?")) return;
+  localStorage.removeItem(API_STORE_KEY);
+  localStorage.removeItem(API_HASH_KEY);
+  GEMINI_API_KEY = "";
+  const input = document.getElementById("apiKeyInput");
+  if (input) { input.value = ""; input.type = "password"; }
+  updateApiStatus("warning", "🔑 API কী প্রয়োজন। নিচে আপনার API কী দিন।");
+  if (!silent) showNotification("API কী মুছে ফেলা হয়েছে।", "info");
 }
 
+let keyVisible = false;
 function showApiKey() {
-    const apiKeyInput = document.getElementById('apiKeyInput');
-    
-    if (apiKeyInput && apiKeyInput.type === 'password' && GEMINI_API_KEY) {
-        apiKeyInput.type = 'text';
-        apiKeyInput.value = GEMINI_API_KEY;
-        
-        setTimeout(() => {
-            apiKeyInput.type = 'password';
-            apiKeyInput.value = '••••••••••••••••';
-        }, 5000);
-    }
+  const input   = document.getElementById("apiKeyInput");
+  const icon    = document.getElementById("eyeIcon");
+  if (!input || !GEMINI_API_KEY) return;
+
+  if (!keyVisible) {
+    input.type  = "text";
+    input.value = GEMINI_API_KEY;
+    if (icon) { icon.className = "fas fa-eye-slash"; }
+    keyVisible  = true;
+    setTimeout(() => {
+      input.type  = "password";
+      input.value = "••••••••••••••••";
+      if (icon) icon.className = "fas fa-eye";
+      keyVisible = false;
+    }, 5000);
+  } else {
+    input.type  = "password";
+    input.value = "••••••••••••••••";
+    if (icon) icon.className = "fas fa-eye";
+    keyVisible  = false;
+  }
 }
 
 async function testApiKey() {
-    const apiKeyInput = document.getElementById('apiKeyInput');
-    let apiKey = apiKeyInput.value.trim();
-    
-    if (apiKey === '••••••••••••••••') {
-        if (!GEMINI_API_KEY) {
-            showNotification('দয়া করে প্রথমে একটি API টি সেভ করুন', 'error');
-            return;
-        }
-        apiKey = GEMINI_API_KEY;
-    } else {
-        try {
-            apiKeyManager.saveApiKey(apiKey);
-            apiKeyInput.value = '••••••••••••••••';
-        } catch (error) {
-            showNotification('API টি সেভ করতে সমস্যা: ' + error.message, 'error');
-            return;
-        }
-    }
-    
-    showLoading('API কী টেস্ট করা হচ্ছে...');
-    
-    try {
-        // Simple test request using single translate wrapper
-        const res = await translateWithGemini("Hello", true);
-        if (res === "API_TEST_SUCCESS") {
-            showNotification('✅ API টি সঠিক! আপনি এখন অনুবাদ করতে পারেন।', 'success');
-            updateApiStatus('success', '✅ API টি সঠিক! আপনি এখন অনুবাদ করতে পারেন।');
-        } else {
-            throw new Error("API টেস্ট ব্যর্থ");
-        }
-    } catch (error) {
-        showNotification('❌ API টি ত্রুটি: ' + error.message, 'error');
-        updateApiStatus('error', '❌ API টি ত্রুটি: ' + error.message);
-    } finally {
-        hideLoading();
-    }
-}
+  const input = document.getElementById("apiKeyInput");
+  let key = input?.value.trim();
 
-// ==================== TRANSLATION FUNCTIONS ====================
-
-// Main translation function
-async function extractAndTranslate() {
-    if (!currentFile) {
-        showNotification("দয়া করে প্রথমে একটি PDF ফাইল সিলেক্ট করুন।", 'error');
-        return;
-    }
-
+  if (key === "••••••••••••••••") {
     if (!GEMINI_API_KEY) {
-        showNotification("দয়া করে প্রথমে একটি বৈধ জিমিনি API টি সেট করুন।", 'error');
-        document.getElementById("apiKeyInput").focus();
-        return;
+      showNotification("প্রথমে একটি API কী সেভ করুন।", "error");
+      return;
     }
-
-    if (currentFile.size > 25 * 1024 * 1024) {
-        showNotification("ফাইল খুব বড়! দয়া করে ২০ এমবি-এর ছোট ফাইল আপলোড করুন।", 'error');
-        return;
+    key = GEMINI_API_KEY;
+  } else if (key) {
+    // Save temporarily if a new key is entered
+    const enc = encryptKey(key);
+    if (enc) {
+      localStorage.setItem(API_STORE_KEY, enc);
+      localStorage.setItem(API_HASH_KEY,  simpleHash(key));
+      GEMINI_API_KEY = key;
+      if (input) input.value = "••••••••••••••••";
     }
+  }
 
-    const extractTranslateBtn = document.getElementById("extractTranslateBtn");
-    if (extractTranslateBtn) extractTranslateBtn.disabled = true;
-    const stopBtn = document.getElementById("stopBtn");
-    if (stopBtn) stopBtn.style.display = "inline-flex";
-    isTranslationRunning = true;
-
-    try {
-        showLoading("PDF প্রসেস করা হচ্ছে...");
-
-        if (selectedPdfType === "ocr") {
-            await extractWithOCRAndTranslate(currentFile);
-        } else {
-            await extractNormalAndTranslate(currentFile);
-        }
-
-        if (isTranslationRunning) {
-            saveToHistory();
-        }
-    } catch (error) {
-        if (isTranslationRunning) {
-            console.error("Translation error:", error);
-            showNotification("ত্রুটি: " + (error.message || "অনুবাদ করতে সমস্যা হয়েছে"), 'error');
-        }
-    } finally {
-        if (isTranslationRunning) {
-            if (extractTranslateBtn) extractTranslateBtn.disabled = false;
-            if (stopBtn) stopBtn.style.display = "none";
-            hideLoading();
-            isTranslationRunning = false;
-        }
+  showLoadingCard("API কী টেস্ট করা হচ্ছে...");
+  try {
+    const res = await translateWithGemini("بسم الله", true);
+    if (res === "API_TEST_SUCCESS") {
+      showNotification("✅ API কী সঠিক! অনুবাদ করা যাবে।", "success");
+      updateApiStatus("success", "✅ API কী সঠিক! আপনি এখন অনুবাদ করতে পারেন।");
+    } else {
+      throw new Error("টেস্ট ব্যর্থ");
     }
+  } catch (err) {
+    showNotification("❌ API ত্রুটি: " + err.message, "error");
+    updateApiStatus("error", "❌ API ত্রুটি: " + err.message);
+  } finally {
+    hideLoadingCard();
+  }
 }
 
-// Normal PDF extraction with batching translation
+// ══════════════════════════════════════════════════════════════════
+// MAIN TRANSLATION ORCHESTRATOR
+// ══════════════════════════════════════════════════════════════════
+
+async function extractAndTranslate() {
+  if (!currentFile) {
+    showNotification("প্রথমে একটি PDF ফাইল সিলেক্ট করুন।", "error");
+    return;
+  }
+  if (!GEMINI_API_KEY) {
+    showNotification("প্রথমে একটি বৈধ Gemini API কী সেট করুন।", "error");
+    document.getElementById("apiKeyInput")?.focus();
+    return;
+  }
+  if (currentFile.size > 25 * 1048576) {
+    showNotification("ফাইল খুব বড়! ২৫ এমবি-এর কম ফাইল আপলোড করুন।", "error");
+    return;
+  }
+
+  const startBtn = document.getElementById("extractTranslateBtn");
+  const stopBtn  = document.getElementById("stopBtn");
+  if (startBtn) startBtn.disabled = true;
+  if (stopBtn)  stopBtn.classList.remove("hidden");
+  isTranslationRunning = true;
+
+  try {
+    showProgressBar();
+    if (selectedPdfType === "ocr") {
+      await extractWithOCRAndTranslate(currentFile);
+    } else {
+      await extractNormalAndTranslate(currentFile);
+    }
+    if (isTranslationRunning) saveToHistory();
+  } catch (err) {
+    if (isTranslationRunning) {
+      console.error("Translation error:", err);
+      showNotification("ত্রুটি: " + (err.message || "অনুবাদ করতে সমস্যা হয়েছে"), "error");
+    }
+  } finally {
+    if (startBtn) startBtn.disabled = false;
+    if (stopBtn)  stopBtn.classList.add("hidden");
+    hideLoadingCard();
+    hideProgressBar();
+    isTranslationRunning = false;
+  }
+}
+
+// ══════════════════════════════════════════════════════════════════
+// NORMAL PDF EXTRACTION + BATCH TRANSLATION
+// FIX 7: Correct batch result accumulation — writes all chunk pages at once
+// ══════════════════════════════════════════════════════════════════
+
 async function extractNormalAndTranslate(file) {
+  const arrayBuf = await file.arrayBuffer();
+  const pdf      = await pdfjsLib.getDocument(arrayBuf).promise;
+  const total    = Math.min(pdf.numPages, 4000);
+
+  let arabicText      = "";
+  let banglaText      = "";
+  let chunk           = [];
+  let chunkChars      = 0;
+
+  // Returns the bangla text string to append for all pages in the chunk
+  const flushChunk = async () => {
+    if (chunk.length === 0) return "";
+    const pages = [...chunk];
+    chunk      = [];
+    chunkChars = 0;
+    let result = "";
     try {
-        const pdf = await pdfjsLib.getDocument(await file.arrayBuffer()).promise;
-        const totalPages = Math.min(pdf.numPages, 4000);
-        let arabicText = "";
-        let banglaTranslation = "";
-
-        document.getElementById("progressContainer").style.display = "block";
-
-        // We'll accumulate pages into chunks
-        let chunk = []; // array of {pageNumber, text}
-        let chunkChars = 0;
-
-        const flushChunk = async () => {
-            if (chunk.length === 0) return {};
-            try {
-                const translationsMap = await batchTranslatePages(chunk);
-                return translationsMap;
-            } catch (e) {
-                console.warn("Batch translation failed", e);
-                return {};
-            } finally {
-                chunk = [];
-                chunkChars = 0;
-            }
-        };
-
-        for (let i = 1; i <= totalPages; i++) {
-            if (!isTranslationRunning) {
-                console.log("Translation stopped by user");
-                return;
-            }
-
-            showLoading(`পৃষ্ঠা ${i}/${totalPages} প্রসেস করা হচ্ছে...`);
-
-            const page = await pdf.getPage(i);
-            const content = await page.getTextContent();
-            const pageText = content.items.map((item) => item.str).join(" ");
-
-            if (pageText.trim().length > 0) {
-                arabicText += `পৃষ্ঠা ${i}:\n${pageText}\n\n`;
-                document.getElementById("arabicText").value = arabicText;
-
-                // Add to chunk
-                const approxLen = pageText.length;
-                chunk.push({ pageNumber: i, text: pageText });
-                chunkChars += approxLen;
-
-                // Flush if chunk large enough or last page
-                let translationsMap = {};
-                const isLast = (i === totalPages);
-                if (chunkChars >= MAX_CHARS_PER_REQUEST || isLast) {
-                    translationsMap = await flushChunk();
-                }
-
-                let translatedText = translationsMap[i] || "";
-                if (!translatedText) {
-                    translatedText = "[অনুবাদ পাওয়া যায়নি]";
-                }
-
-                banglaTranslation += `পৃষ্ঠা ${i}:\n${translatedText}\n\n`;
-                document.getElementById("banglaText").value = banglaTranslation;
-            } else {
-                banglaTranslation += `পৃষ্ঠা ${i}:\n[কোনো টেক্সট নেই]\n\n`;
-                document.getElementById("banglaText").value = banglaTranslation;
-            }
-
-            const progress = Math.round((i / totalPages) * 100);
-            updateProgress(progress);
-
-            await delay(200);
-        }
-
-        if (isTranslationRunning) {
-            extractedText = arabicText;
-            document.getElementById("progressContainer").style.display = "none";
-            showNotification(`${totalPages} পৃষ্ঠা সফলভাবে অনুবাদ করা হয়েছে!`, 'success');
-        }
-    } catch (error) {
-        if (isTranslationRunning) {
-            throw new Error("PDF পড়তে সমস্যা: " + error.message);
-        }
+      const map = await batchTranslatePages(pages);
+      for (const p of pages) {
+        result += `পৃষ্ঠা ${p.pageNumber}:\n${map[p.pageNumber] || "[অনুবাদ পাওয়া যায়নি]"}\n\n`;
+      }
+    } catch (e) {
+      console.warn("Batch flush failed:", e);
+      for (const p of pages) {
+        result += `পৃষ্ঠা ${p.pageNumber}:\n[অনুবাদ ব্যর্থ]\n\n`;
+      }
     }
+    return result;
+  };
+
+  for (let i = 1; i <= total; i++) {
+    if (!isTranslationRunning) return;
+
+    showLoadingCard(`পৃষ্ঠা ${i}/${total} প্রসেস করা হচ্ছে...`);
+
+    const page    = await pdf.getPage(i);
+    const content = await page.getTextContent();
+    const text    = content.items.map(it => it.str).join(" ");
+
+    if (text.trim()) {
+      arabicText += `পৃষ্ঠা ${i}:\n${text}\n\n`;
+      document.getElementById("arabicText").value = arabicText;
+
+      chunk.push({ pageNumber: i, text });
+      chunkChars += text.length;
+
+      if (chunkChars >= MAX_CHARS_PER_REQUEST || i === total) {
+        banglaText += await flushChunk();
+        document.getElementById("banglaText").value = banglaText;
+      }
+    } else {
+      arabicText += `পৃষ্ঠা ${i}:\n[কোনো টেক্সট নেই]\n\n`;
+      banglaText += `পৃষ্ঠা ${i}:\n[কোনো টেক্সট নেই]\n\n`;
+      document.getElementById("arabicText").value = arabicText;
+      document.getElementById("banglaText").value = banglaText;
+    }
+
+    updateProgress(Math.round((i / total) * 100));
+    await delay(200);
+  }
+
+  // Flush any remaining pages if translation stopped between chunks
+  if (chunk.length > 0 && isTranslationRunning) {
+    banglaText += await flushChunk();
+    document.getElementById("banglaText").value = banglaText;
+  }
+
+  if (isTranslationRunning) {
+    extractedArabicText = arabicText;
+    showNotification(`${total} পৃষ্ঠা সফলভাবে অনুবাদ করা হয়েছে!`, "success");
+  }
 }
 
-// OCR extraction with batching translation
+// ══════════════════════════════════════════════════════════════════
+// OCR EXTRACTION + BATCH TRANSLATION
+// FIX 8: Tesseract worker terminated on normal completion too
+// ══════════════════════════════════════════════════════════════════
+
 async function extractWithOCRAndTranslate(file) {
-    showLoading("OCR প্রস্তুত করা হচ্ছে...");
+  showLoadingCard("OCR প্রস্তুত করা হচ্ছে...");
 
-    try {
-        if (!tesseractWorker) {
-            // Note: Tesseract.js is a large library; consider optimizing loading.
-            tesseractWorker = await Tesseract.createWorker("ara");
+  // Always create a fresh worker
+  if (tesseractWorker) {
+    try { await tesseractWorker.terminate(); } catch (_) {}
+    tesseractWorker = null;
+  }
+  tesseractWorker = await Tesseract.createWorker("ara");
+
+  try {
+    const arrayBuf = await file.arrayBuffer();
+    const pdf      = await pdfjsLib.getDocument(arrayBuf).promise;
+    const total    = Math.min(pdf.numPages, 4000);
+
+    let arabicText  = "";
+    let banglaText  = "";
+    let chunk       = [];
+    let chunkChars  = 0;
+
+    const flushChunk = async () => {
+      if (chunk.length === 0) return "";
+      const pages = [...chunk];
+      chunk      = [];
+      chunkChars = 0;
+      let result = "";
+      try {
+        const map = await batchTranslatePages(pages);
+        for (const p of pages) {
+          result += `পৃষ্ঠা ${p.pageNumber}:\n${map[p.pageNumber] || "[অনুবাদ পাওয়া যায়নি]"}\n\n`;
         }
-
-        const pdf = await pdfjsLib.getDocument(await file.arrayBuffer()).promise;
-        const totalPages = Math.min(pdf.numPages, 4000);
-        let arabicText = "";
-        let banglaTranslation = "";
-
-        document.getElementById("progressContainer").style.display = "block";
-
-        // batching helpers
-        let chunk = [];
-        let chunkChars = 0;
-        const flushChunk = async () => {
-            if (chunk.length === 0) return {};
-            try {
-                const translationsMap = await batchTranslatePages(chunk);
-                return translationsMap;
-            } catch (e) {
-                console.warn("Batch translation failed", e);
-                return {};
-            } finally {
-                chunk = [];
-                chunkChars = 0;
-            }
-        };
-
-        for (let i = 1; i <= totalPages; i++) {
-            if (!isTranslationRunning) {
-                console.log("Translation stopped by user");
-                if (tesseractWorker) {
-                    tesseractWorker.terminate();
-                    tesseractWorker = null;
-                }
-                return;
-            }
-
-            showLoading(`পৃষ্ঠা ${i}/${totalPages} OCR করা হচ্ছে...`);
-
-            const page = await pdf.getPage(i);
-            const viewport = page.getViewport({ scale: 1.5 });
-
-            const canvas = document.createElement("canvas");
-            const context = canvas.getContext("2d");
-            canvas.height = viewport.height;
-            canvas.width = viewport.width;
-
-            await page.render({
-                canvasContext: context,
-                viewport: viewport,
-            }).promise;
-
-            const { data: { text } } = await tesseractWorker.recognize(canvas);
-
-            if (text.trim().length > 0) {
-                arabicText += `পৃষ্ঠা ${i}:\n${text}\n\n`;
-                document.getElementById("arabicText").value = arabicText;
-
-                // Add to chunk
-                const approxLen = text.length;
-                chunk.push({ pageNumber: i, text });
-                chunkChars += approxLen;
-
-                // flush if large or last
-                const isLast = (i === totalPages);
-                let translationsMap = {};
-                if (chunkChars >= MAX_CHARS_PER_REQUEST || isLast) {
-                    translationsMap = await flushChunk();
-                }
-
-                let translatedText = translationsMap[i] || "";
-                if (!translatedText) {
-                    translatedText = "[অনুবাদ পাওয়া যায়নি]";
-                }
-
-                banglaTranslation += `পৃষ্ঠা ${i}:\n${translatedText}\n\n`;
-                document.getElementById("banglaText").value = banglaTranslation;
-            } else {
-                banglaTranslation += `পৃষ্ঠা ${i}:\n[কোনো টেক্সট নেই]\n\n`;
-                document.getElementById("banglaText").value = banglaTranslation;
-            }
-
-            const progress = Math.round((i / totalPages) * 100);
-            updateProgress(progress);
-
-            await delay(300);
+      } catch (e) {
+        for (const p of pages) {
+          result += `পৃষ্ঠা ${p.pageNumber}:\n[অনুবাদ ব্যর্থ]\n\n`;
         }
+      }
+      return result;
+    };
 
-        if (isTranslationRunning) {
-            extractedText = arabicText;
-            document.getElementById("progressContainer").style.display = "none";
-            showNotification(`${totalPages} পৃষ্ঠা OCR এবং অনুবাদ সম্পূর্ণ!`, 'success');
+    for (let i = 1; i <= total; i++) {
+      if (!isTranslationRunning) return;
+
+      showLoadingCard(`পৃষ্ঠা ${i}/${total} OCR করা হচ্ছে...`);
+
+      const page     = await pdf.getPage(i);
+      const viewport = page.getViewport({ scale: 1.5 });
+      const canvas   = document.createElement("canvas");
+      canvas.width   = viewport.width;
+      canvas.height  = viewport.height;
+      await page.render({ canvasContext: canvas.getContext("2d"), viewport }).promise;
+
+      const { data: { text } } = await tesseractWorker.recognize(canvas);
+
+      if (text.trim()) {
+        arabicText += `পৃষ্ঠা ${i}:\n${text}\n\n`;
+        document.getElementById("arabicText").value = arabicText;
+
+        chunk.push({ pageNumber: i, text });
+        chunkChars += text.length;
+
+        if (chunkChars >= MAX_CHARS_PER_REQUEST || i === total) {
+          banglaText += await flushChunk();
+          document.getElementById("banglaText").value = banglaText;
         }
-    } catch (error) {
-        if (isTranslationRunning) {
-            throw new Error("OCR ত্রুটি: " + error.message);
-        }
+      } else {
+        arabicText += `পৃষ্ঠা ${i}:\n[কোনো টেক্সট নেই]\n\n`;
+        banglaText += `পৃষ্ঠা ${i}:\n[কোনো টেক্সট নেই]\n\n`;
+        document.getElementById("arabicText").value = arabicText;
+        document.getElementById("banglaText").value = banglaText;
+      }
+
+      updateProgress(Math.round((i / total) * 100));
+      await delay(300);
     }
-}
 
-// ==================== UTILITY FUNCTIONS ====================
-
-function showLoading(message) {
-    const loading = document.getElementById("loading");
-    const loadingText = document.getElementById("loadingText");
-    if (loading) loading.style.display = "block";
-    if (loadingText) loadingText.textContent = message;
-}
-
-function hideLoading() {
-    const loading = document.getElementById("loading");
-    if (loading) loading.style.display = "none";
-}
-
-function updateProgress(percent) {
-    const progressBar = document.getElementById("progressBar");
-    if (progressBar) {
-        progressBar.style.width = percent + "%";
-        progressBar.textContent = percent + "%";
+    if (isTranslationRunning) {
+      extractedArabicText = arabicText;
+      showNotification(`${total} পৃষ্ঠা OCR ও অনুবাদ সম্পূর্ণ!`, "success");
     }
+  } finally {
+    // FIX 8: Always terminate worker on both normal completion AND error
+    if (tesseractWorker) {
+      try { await tesseractWorker.terminate(); } catch (_) {}
+      tesseractWorker = null;
+    }
+  }
 }
+
+// ══════════════════════════════════════════════════════════════════
+// STOP / CLEAR
+// ══════════════════════════════════════════════════════════════════
 
 function stopTranslation() {
-    if (isTranslationRunning) {
-        isTranslationRunning = false;
-        const stopBtn = document.getElementById("stopBtn");
-        if (stopBtn) stopBtn.style.display = "none";
-        const extractTranslateBtn = document.getElementById("extractTranslateBtn");
-        if (extractTranslateBtn) extractTranslateBtn.disabled = false;
-        hideLoading();
-        document.getElementById("progressContainer").style.display = "none";
-        showNotification("অনুবাদ বন্ধ করা হয়েছে!", 'info');
+  if (!isTranslationRunning) return;
+  isTranslationRunning = false;
 
-        if (tesseractWorker) {
-            tesseractWorker.terminate();
-            tesseractWorker = null;
-        }
-    }
+  document.getElementById("stopBtn")?.classList.add("hidden");
+  const startBtn = document.getElementById("extractTranslateBtn");
+  if (startBtn) startBtn.disabled = false;
+
+  hideLoadingCard();
+  hideProgressBar();
+
+  if (tesseractWorker) {
+    tesseractWorker.terminate().catch(() => {});
+    tesseractWorker = null;
+  }
+
+  showNotification("অনুবাদ বন্ধ করা হয়েছে।", "info");
 }
 
-// ==================== ENHANCED FEATURES INITIALIZATION ====================
-
-// Drag and Drop Functionality
-function setupDragAndDrop() {
-    const dropArea = document.getElementById('fileUploadArea');
-    
-    if (!dropArea) return;
-    
-    ['dragenter', 'dragover', 'dragleave', 'drop'].forEach(eventName => {
-        dropArea.addEventListener(eventName, preventDefaults, false);
-        document.body.addEventListener(eventName, preventDefaults, false);
-    });
-    
-    function preventDefaults(e) {
-        e.preventDefault();
-        e.stopPropagation();
-    }
-    
-    ['dragenter', 'dragover'].forEach(eventName => {
-        dropArea.addEventListener(eventName, highlight, false);
-    });
-    
-    ['dragleave', 'drop'].forEach(eventName => {
-        dropArea.addEventListener(eventName, unhighlight, false);
-    });
-    
-    function highlight() {
-        dropArea.classList.add('drag-over');
-    }
-    
-    function unhighlight() {
-        dropArea.classList.remove('drag-over');
-    }
-    
-    dropArea.addEventListener('drop', handleDrop, false);
-    
-    function handleDrop(e) {
-        const dt = e.dataTransfer;
-        const files = dt.files;
-        
-        if (files.length > 0) {
-            const file = files[0];
-            
-            if (file.type === 'application/pdf') {
-                currentFile = file;
-                displayFileInfo(file);
-                showNotification('PDF ফাইল সফলভাবে আপলোড হয়েছে!', 'success');
-            } else {
-                showNotification('শুধুমাত্র PDF ফাইল আপলোড করুন।', 'error');
-            }
-        }
-    }
+function clearAll() {
+  stopTranslation();
+  const pdfInput = document.getElementById("pdfFile");
+  if (pdfInput) pdfInput.value = "";
+  document.getElementById("arabicText").value = "";
+  document.getElementById("banglaText").value = "";
+  document.getElementById("fileBadge")?.classList.remove("show");
+  currentFile        = null;
+  extractedArabicText = "";
+  stopSpeech();
+  showNotification("সব রিসেট করা হয়েছে।", "info");
 }
 
-// Keyboard Shortcuts
-function setupKeyboardShortcuts() {
-    document.addEventListener('keydown', function(e) {
-        if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') {
-            e.preventDefault();
-            if (!document.getElementById('extractTranslateBtn').disabled) {
-                extractAndTranslate();
-            }
-        }
-        
-        if (e.key === 'Escape') {
-            stopTranslation();
-        }
-        
-        if ((e.ctrlKey || e.metaKey) && e.key === 's') {
-            e.preventDefault();
-            saveCurrentTranslation();
-        }
-    });
+// ══════════════════════════════════════════════════════════════════
+// PROGRESS / LOADING UI
+// ══════════════════════════════════════════════════════════════════
+
+function showProgressBar() {
+  const el = document.getElementById("progressContainer");
+  if (el) el.classList.remove("hidden");
+  updateProgress(0);
 }
 
-// Initialize all enhanced features
-function initializeEnhancedFeatures() {
-    console.log("Initializing enhanced features...");
-    setupDragAndDrop();
-    setupKeyboardShortcuts();
+function hideProgressBar() {
+  const el = document.getElementById("progressContainer");
+  if (el) el.classList.add("hidden");
 }
 
-// ==================== TAB NAVIGATION ====================
-
-function showTab(tabName) {
-    document.querySelectorAll(".main-card").forEach((tab) => {
-        tab.classList.add("hidden");
-    });
-
-    document.querySelectorAll(".nav-tab").forEach((tab) => {
-        tab.classList.remove("active");
-    });
-
-    const targetTab = document.getElementById(tabName + "-tab");
-    if (targetTab) {
-        targetTab.classList.remove("hidden");
-    }
-    
-    // Note: event is passed implicitly here from the inline JS call in HTML
-    if (event && event.currentTarget) {
-        event.currentTarget.classList.add("active");
-    }
+function updateProgress(pct) {
+  const bar = document.getElementById("progressBar");
+  if (!bar) return;
+  bar.style.width = pct + "%";
+  // Use Bangla numerals for text
+  bar.textContent = pct + "%";
 }
 
-// ==================== READER FUNCTIONS ====================
+function showLoadingCard(msg) {
+  const card = document.getElementById("loadingCard");
+  const text = document.getElementById("loadingText");
+  if (card) card.classList.remove("hidden");
+  if (text) text.textContent = msg || "অনুবাদ করা হচ্ছে...";
+}
+
+function hideLoadingCard() {
+  document.getElementById("loadingCard")?.classList.add("hidden");
+}
+
+// ══════════════════════════════════════════════════════════════════
+// DOWNLOAD — NEW FEATURE
+// ══════════════════════════════════════════════════════════════════
+
+function downloadTranslation() {
+  const arabic = document.getElementById("arabicText")?.value || "";
+  const bangla = document.getElementById("banglaText")?.value  || "";
+
+  if (!arabic && !bangla) {
+    showNotification("ডাউনলোড করার জন্য কোনো টেক্সট নেই।", "warning");
+    return;
+  }
+
+  const filename = (currentFile?.name?.replace(/\.pdf$/i, "") || "albayan") + "_অনুবাদ.txt";
+  const content  =
+    "আল বায়ান — আরবি থেকে বাংলা অনুবাদ\n" +
+    "═══════════════════════════════════\n\n" +
+    "আরবি মূল টেক্সট:\n" +
+    "───────────────\n" + arabic + "\n\n" +
+    "বাংলা অনুবাদ:\n" +
+    "─────────────\n" + bangla;
+
+  const blob = new Blob([content], { type: "text/plain;charset=utf-8" });
+  const url  = URL.createObjectURL(blob);
+  const a    = Object.assign(document.createElement("a"), { href: url, download: filename });
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+  showNotification("অনুবাদ ডাউনলোড শুরু হয়েছে!", "success");
+}
+
+// ══════════════════════════════════════════════════════════════════
+// READER MODAL
+// ══════════════════════════════════════════════════════════════════
 
 function openReader(type) {
-    const modal = document.getElementById("readerModal");
-    const title = document.getElementById("readerTitle");
-    const body = document.getElementById("readerBody");
+  const modal = document.getElementById("readerModal");
+  const title = document.getElementById("readerTitle");
+  const body  = document.getElementById("readerBody");
+  if (!modal || !title || !body) return;
 
-    let content = "";
-    if (type === "arabic") {
-        title.textContent = "আরবি টেক্সট";
-        content = document.getElementById("arabicText").value || "কোনো টেক্সট নেই";
-        body.innerHTML = `<div class="arabic-text" style="font-size: 24px; line-height: 3; text-align: right; direction: rtl;">${content}</div>`;
-    } else {
-        title.textContent = "বাংলা অনুবাদ";
-        content = document.getElementById("banglaText").value || "কোনো অনুবাদ নেই";
-        body.innerHTML = `<div class="bangla-text" style="font-size: 20px; line-height: 2; text-align: left;">${content}</div>`;
-    }
+  stopSpeech();
 
-    modal.style.display = "block";
-    stopSpeech();
+  if (type === "arabic") {
+    title.textContent = "আরবি টেক্সট";
+    const text = document.getElementById("arabicText")?.value || "কোনো টেক্সট নেই";
+    body.innerHTML = `<div style="font-family:'Amiri',serif;font-size:1.4rem;line-height:2.8;direction:rtl;text-align:right;">${escapeHtml(text)}</div>`;
+    body.dir = "rtl";
+  } else {
+    title.textContent = "বাংলা অনুবাদ";
+    const text = document.getElementById("banglaText")?.value || "কোনো অনুবাদ নেই";
+    body.innerHTML = `<div style="font-family:'Hind Siliguri',sans-serif;font-size:1.1rem;line-height:1.9;text-align:justify;">${escapeHtml(text)}</div>`;
+    body.dir = "ltr";
+  }
+
+  modal.classList.add("open");
 }
 
 function closeReader() {
-    stopSpeech();
-    document.getElementById("readerModal").style.display = "none";
+  stopSpeech();
+  document.getElementById("readerModal")?.classList.remove("open");
+}
+
+function handleModalClick(e) {
+  if (e.target === document.getElementById("readerModal")) closeReader();
 }
 
 function changeFontSize(delta) {
-    const bodyDiv = document.getElementById("readerBody").querySelector("div");
-    if (!bodyDiv) return;
-    const currentSize = parseInt(window.getComputedStyle(bodyDiv).fontSize);
-    const newSize = Math.max(12, Math.min(40, currentSize + delta));
-    bodyDiv.style.fontSize = newSize + "px";
+  const inner = document.getElementById("readerBody")?.querySelector("div");
+  if (!inner) return;
+  const current = parseFloat(window.getComputedStyle(inner).fontSize);
+  inner.style.fontSize = Math.max(10, Math.min(40, current + delta)) + "px";
 }
 
-function toggleDarkReader() {
-    const body = document.getElementById("readerBody");
-    const isDark = body.style.backgroundColor === "rgb(26, 32, 44)";
-
-    if (isDark) {
-        body.style.backgroundColor = "";
-        body.style.color = "";
-    } else {
-        body.style.backgroundColor = "#1A202C";
-        body.style.color = "#CBD5E0";
-    }
+function toggleNightReader() {
+  const body = document.getElementById("readerBody");
+  if (!body) return;
+  const isNight = body.getAttribute("data-night") === "true";
+  if (isNight) {
+    body.style.background = "";
+    body.style.color      = "";
+    body.removeAttribute("data-night");
+  } else {
+    body.style.background = "#101820";
+    body.style.color      = "#C8D8E8";
+    body.setAttribute("data-night", "true");
+  }
 }
 
-// Text-to-speech functions
+// ══════════════════════════════════════════════════════════════════
+// TEXT TO SPEECH
+// ══════════════════════════════════════════════════════════════════
+
 function toggleSpeakText() {
-    if (isSpeaking) {
-        stopSpeech();
-    } else {
-        speakText();
-    }
+  isSpeaking ? stopSpeech() : speakText();
 }
 
 function speakText() {
-    const text = document.getElementById("readerBody").textContent;
-    if (!text || text === "কোনো অনুবাদ নেই" || text === "কোনো টেক্সট নেই") {
-        showNotification("পড়ার জন্য কোনো টেক্সট নেই।", 'warning');
-        return;
-    }
+  const text = document.getElementById("readerBody")?.textContent?.trim();
+  if (!text || text === "কোনো অনুবাদ নেই" || text === "কোনো টেক্সট নেই") {
+    showNotification("পড়ার জন্য কোনো টেক্সট নেই।", "warning");
+    return;
+  }
+  if (!("speechSynthesis" in window)) {
+    showNotification("আপনার ব্রাউজার TTS সমর্থন করে না।", "error");
+    return;
+  }
 
-    if ("speechSynthesis" in window) {
-        stopSpeech();
+  stopSpeech();
 
-        const utterance = new SpeechSynthesisUtterance(text);
-        // Attempt to find a suitable Bengali voice if available
-        const bnVoice = speechSynthesis.getVoices().find(voice => voice.lang === 'bn-BD' || voice.lang === 'bn-IN');
-        if (bnVoice) {
-            utterance.voice = bnVoice;
-            utterance.lang = bnVoice.lang;
-        } else {
-             utterance.lang = "bn-BD"; // Fallback
-        }
-       
-        utterance.rate = 0.8;
-        utterance.pitch = 1;
+  const utterance = new SpeechSynthesisUtterance(text);
+  const voices    = window.speechSynthesis.getVoices();
+  const bnVoice   = voices.find(v => v.lang === "bn-BD" || v.lang === "bn-IN");
+  if (bnVoice) { utterance.voice = bnVoice; utterance.lang = bnVoice.lang; }
+  else           { utterance.lang  = "bn-BD"; }
+  utterance.rate  = 0.85;
+  utterance.pitch = 1;
 
-        isSpeaking = true;
-        const ttsButton = document.getElementById("ttsButton");
-        if (ttsButton) {
-            ttsButton.innerHTML = '<i class="fas fa-stop"></i> থামুন';
-            ttsButton.classList.add("tts-active");
-        }
+  isSpeaking = true;
+  const btn = document.getElementById("ttsButton");
+  if (btn) { btn.innerHTML = '<i class="fas fa-stop"></i> থামুন'; btn.classList.add("tts-active"); }
 
-        utterance.onend = function () {
-            stopSpeech();
-        };
-
-        utterance.onerror = function (e) {
-            console.error('SpeechSynthesisUtterance.onerror', e);
-            stopSpeech();
-            showNotification("Text-to-speech ত্রুটি হয়েছে।", 'error');
-        };
-
-        speechSynthesis.speak(utterance);
-    } else {
-        showNotification("Text-to-speech is not supported in your browser.", 'error');
-    }
+  utterance.onend = utterance.onerror = () => stopSpeech();
+  window.speechSynthesis.speak(utterance);
 }
 
 function stopSpeech() {
-    if ("speechSynthesis" in window) {
-        speechSynthesis.cancel();
-    }
-    isSpeaking = false;
-    const ttsButton = document.getElementById("ttsButton");
-    if (ttsButton) {
-        ttsButton.innerHTML = '<i class="fas fa-volume-up"></i> পড়ুন';
-        ttsButton.classList.remove("tts-active");
-    }
+  if ("speechSynthesis" in window) window.speechSynthesis.cancel();
+  isSpeaking = false;
+  const btn = document.getElementById("ttsButton");
+  if (btn) { btn.innerHTML = '<i class="fas fa-volume-high"></i> পড়ুন'; btn.classList.remove("tts-active"); }
 }
 
-// ==================== HISTORY FUNCTIONS ====================
+// ══════════════════════════════════════════════════════════════════
+// HISTORY
+// FIX 9: Only store preview in localStorage to avoid quota crash
+// ══════════════════════════════════════════════════════════════════
+
+const HISTORY_PREVIEW_LEN = 500; // chars stored per item
+const HISTORY_MAX_ITEMS   = 20;
 
 function saveToHistory() {
-    const fullArabicText = document.getElementById("arabicText").value;
-    const fullBanglaText = document.getElementById("banglaText").value;
-    
-    if (!fullArabicText && !fullBanglaText) return;
+  const arabic = document.getElementById("arabicText")?.value || "";
+  const bangla = document.getElementById("banglaText")?.value  || "";
+  if (!arabic && !bangla) return;
 
-    const history = JSON.parse(localStorage.getItem("translationHistory") || "[]");
-    const newItem = {
-        id: Date.now(),
-        title: currentFile?.name || "অনুবাদ",
-        fullArabicText: fullArabicText,
-        fullBanglaText: fullBanglaText,
-        previewArabicText: fullArabicText.substring(0, 200) + (fullArabicText.length > 200 ? "..." : ""),
-        previewBanglaText: fullBanglaText.substring(0, 200) + (fullBanglaText.length > 200 ? "..." : ""),
-        date: new Date().toLocaleDateString("bn-BD"),
-    };
+  const history = getHistory();
+  history.unshift({
+    id:            Date.now(),
+    title:         currentFile?.name || "অনুবাদ",
+    arabicPreview: arabic.substring(0, HISTORY_PREVIEW_LEN),
+    banglaPreview: bangla.substring(0, HISTORY_PREVIEW_LEN),
+    // Store full text only if small enough (< 100 KB each)
+    arabicFull:    arabic.length < 100000 ? arabic : null,
+    banglaFull:    bangla.length < 100000 ? bangla : null,
+    date:          new Date().toLocaleDateString("bn-BD"),
+  });
 
-    history.unshift(newItem);
-    if (history.length > 20) history.pop();
-    localStorage.setItem("translationHistory", JSON.stringify(history));
-    loadHistory();
+  if (history.length > HISTORY_MAX_ITEMS) history.length = HISTORY_MAX_ITEMS;
+
+  try {
+    localStorage.setItem("albayan_history", JSON.stringify(history));
+  } catch (e) {
+    // Quota exceeded — trim and retry
+    history.forEach(h => { delete h.arabicFull; delete h.banglaFull; });
+    try { localStorage.setItem("albayan_history", JSON.stringify(history)); } catch (_) {}
+  }
+
+  loadHistory();
+}
+
+function getHistory() {
+  try { return JSON.parse(localStorage.getItem("albayan_history") || "[]"); }
+  catch (_) { return []; }
 }
 
 function loadHistory() {
-    const history = JSON.parse(localStorage.getItem("translationHistory") || "[]");
-    const historyGrid = document.getElementById("historyGrid");
+  const history = getHistory();
+  const grid    = document.getElementById("historyGrid");
+  if (!grid) return;
 
-    if (!historyGrid) return;
+  if (history.length === 0) {
+    grid.innerHTML = `
+      <div class="history-empty">
+        <i class="fas fa-inbox"></i>
+        <h3>কোনো অনুবাদ ইতিহাস নেই</h3>
+        <p>আপনার প্রথম অনুবাদ শুরু করুন!</p>
+      </div>`;
+    return;
+  }
 
-    if (history.length === 0) {
-        historyGrid.innerHTML = `
-            <div style="text-align: center; color: #666; padding: 40px;">
-                <i class="fas fa-inbox" style="font-size: 3rem; margin-bottom: 20px; opacity: 0.5;"></i>
-                <p>কোনো অনুবাদ ইতিহাস নেই</p>
-                <p style="margin-top: 10px; font-size: 0.9rem;">আপনার প্রথম অনুবাদ শুরু করুন!</p>
-            </div>
-        `;
-        return;
-    }
-
-    historyGrid.innerHTML = history.map((item) => `
-        <div class="history-card" onclick="loadHistoryItem(${item.id})">
-            <div class="history-card-header">
-                <div class="history-title">${item.title}</div>
-                <div class="history-date">${item.date}</div>
-            </div>
-            <div class="history-preview">${item.previewBanglaText}</div>
-        </div>
-    `).join("");
+  grid.innerHTML = history.map(item => `
+    <div class="history-card" onclick="loadHistoryItem(${item.id})" tabindex="0"
+         onkeydown="if(event.key==='Enter')loadHistoryItem(${item.id})">
+      <div class="history-card-header">
+        <div class="history-card-title">${escapeHtml(item.title)}</div>
+        <div class="history-card-date">${item.date}</div>
+      </div>
+      <div class="history-card-preview">${escapeHtml(item.banglaPreview || "")}</div>
+    </div>
+  `).join("");
 }
 
 function loadHistoryItem(id) {
-    const history = JSON.parse(localStorage.getItem("translationHistory") || "[]");
-    const item = history.find((h) => h.id === id);
+  const item = getHistory().find(h => h.id === id);
+  if (!item) return;
 
-    if (item) {
-        document.getElementById("arabicText").value = item.fullArabicText || "";
-        document.getElementById("banglaText").value = item.fullBanglaText || "";
-        
-        currentFile = null; 
-        const pdfInput = document.getElementById("pdfFile");
-        if (pdfInput) pdfInput.value = ""; 
-        const fileInfo = document.getElementById("fileInfo");
-        if (fileInfo) fileInfo.style.display = "none";
+  document.getElementById("arabicText").value = item.arabicFull || item.arabicPreview || "";
+  document.getElementById("banglaText").value  = item.banglaFull || item.banglaPreview  || "";
 
-        showTab("translate");
-        showNotification("ইতিহাস থেকে লোড করা হয়েছে!", 'success');
-    }
+  currentFile = null;
+  const pdfInput = document.getElementById("pdfFile");
+  if (pdfInput) pdfInput.value = "";
+  document.getElementById("fileBadge")?.classList.remove("show");
+
+  // Find and activate the translate tab nav button
+  const tabs = document.querySelectorAll(".nav-tab");
+  showTab("translate", tabs[0] || null);
+  showNotification("ইতিহাস থেকে লোড করা হয়েছে!", "success");
 }
 
 function saveCurrentTranslation() {
-    const arabicText = document.getElementById("arabicText").value;
-    const banglaText = document.getElementById("banglaText").value;
-    
-    if (!arabicText && !banglaText) {
-        showNotification('সংরক্ষণের জন্য কোনো টেক্সট নেই', 'warning');
-        return;
-    }
-    
-    saveToHistory();
-    showNotification('অনুবাদ ইতিহাসে সংরক্ষণ করা হয়েছে!', 'success');
+  const a = document.getElementById("arabicText")?.value;
+  const b = document.getElementById("banglaText")?.value;
+  if (!a && !b) { showNotification("সংরক্ষণের জন্য কোনো টেক্সট নেই।", "warning"); return; }
+  saveToHistory();
+  showNotification("অনুবাদ ইতিহাসে সংরক্ষণ করা হয়েছে!", "success");
 }
 
 function clearAllHistory() {
-    if (confirm("আপনি কি সব ইতিহাস মুছতে চান?")) {
-        localStorage.removeItem("translationHistory");
-        loadHistory();
-        showNotification("সব ইতিহাস মুছে ফেলা হয়েছে!", 'success');
-    }
+  if (!confirm("সব ইতিহাস মুছবেন?")) return;
+  localStorage.removeItem("albayan_history");
+  loadHistory();
+  showNotification("সব ইতিহাস মুছে ফেলা হয়েছে।", "success");
 }
 
-// ==================== CLEAR ALL FUNCTION ====================
+// ══════════════════════════════════════════════════════════════════
+// TOAST NOTIFICATIONS
+// ══════════════════════════════════════════════════════════════════
 
-function clearAll() {
-    stopTranslation();
-    const pdfInput = document.getElementById("pdfFile");
-    if (pdfInput) pdfInput.value = "";
-    document.getElementById("arabicText").value = "";
-    document.getElementById("banglaText").value = "";
-    const fileInfo = document.getElementById("fileInfo");
-    if (fileInfo) fileInfo.style.display = "none";
-    document.getElementById("progressContainer").style.display = "none";
-    currentFile = null;
-    extractedText = "";
-    stopSpeech();
-    showNotification("সব কিছু রিসেট করা হয়েছে।", 'info');
+function showNotification(message, type = "info") {
+  // Remove existing toasts
+  document.querySelectorAll(".toast").forEach(t => t.remove());
+
+  const icons = { success:"circle-check", error:"circle-xmark", warning:"triangle-exclamation", info:"circle-info" };
+  const icon  = icons[type] || "circle-info";
+
+  const toast = document.createElement("div");
+  toast.className = `toast ${type}`;
+  toast.innerHTML = `
+    <i class="fas fa-${icon}"></i>
+    <span class="toast-msg">${escapeHtml(message)}</span>
+    <button class="toast-close" onclick="this.closest('.toast').remove()" aria-label="Close">&times;</button>`;
+
+  document.body.appendChild(toast);
+  setTimeout(() => toast.remove(), 5000);
 }
 
-// ==================== EVENT LISTENERS ====================
+// ══════════════════════════════════════════════════════════════════
+// UTILITIES
+// ══════════════════════════════════════════════════════════════════
 
-// Close modal when clicking outside
-window.onclick = function (event) {
-    const modal = document.getElementById("readerModal");
-    if (modal && event.target === modal) {
-        closeReader();
-    }
-};
+function escapeHtml(str) {
+  if (!str) return "";
+  return str
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;")
+    .replace(/\n/g, "<br>");
+}
 
-// Stop speech when page is hidden
-document.addEventListener("visibilitychange", function () {
-    if (document.hidden) {
-        stopSpeech();
-    }
+// Stop speech when page hidden
+document.addEventListener("visibilitychange", () => {
+  if (document.hidden) stopSpeech();
 });
 
-console.log("Al Bayan App Initialized Successfully!");
+console.log("✅ Al Bayan initialized.");
