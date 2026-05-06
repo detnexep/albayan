@@ -32,7 +32,7 @@ let lastGeminiRequestTs  = 0;
 
 const GEMINI_MAX_CONCURRENT = 1;
 const GEMINI_MIN_DELAY_MS   = 800;
-const MAX_CHARS_PER_REQUEST = 8000;
+const MAX_CHARS_PER_REQUEST = 3000; // ≈2–3 pages per batch; keeps output well within 8192 tokens
 const MAX_RETRIES           = 5;
 const INITIAL_BACKOFF_MS    = 1000;
 const BACKOFF_MULTIPLIER    = 2;
@@ -62,62 +62,32 @@ function releaseGeminiSlot() {
   lastGeminiRequestTs  = Date.now();
 }
 
-// ── FIX 2: Improved sanitizeModelNoise ──────────────────────────
-// Only strips known model artefacts; never touches Bengali/Arabic.
-function sanitizeModelNoise(text) {
-  if (!text || typeof text !== "string") return text || "";
-  let out = text;
-  out = out.replace(/\bMAX_TOKENS\b/gi, "");
-  out = out.replace(/\bgemini-[\w.-]+\b/gi, "");
-  // Only remove pure-ASCII tokens (≥8 chars) NOT followed by a non-ASCII char
-  // Use word-boundary that respects ASCII only:
-  out = out.replace(/(?<![^\x00-\x7F])[A-Za-z0-9_-]{8,}(?![^\x00-\x7F])/g, (match) => {
-    // Keep known Bengali/Arabic-adjacent tokens; only remove if purely alphanumeric noise
-    if (/^[A-Z0-9_-]+$/.test(match)) return "";
-    return match;
-  });
-  out = out.replace(/[ \t]{2,}/g, " ");
-  out = out.replace(/\n{3,}/g, "\n\n");
-  out = out.replace(/\s+([.,:;!?])/g, "$1");
-  return out.trim();
+// ── Extract text from a Gemini /v1beta/models/..:generateContent response ──
+// Only reads candidates[0].content.parts[*].text — never walks other keys.
+// This prevents internal IDs, role strings, etc. from leaking into output.
+function extractGeminiText(data) {
+  if (!data) return "";
+  try {
+    const parts = data?.candidates?.[0]?.content?.parts;
+    if (Array.isArray(parts)) {
+      return parts
+        .map(p => (typeof p?.text === "string" ? p.text : ""))
+        .join("\n")
+        .trim();
+    }
+  } catch (_) {}
+  return "";
 }
 
-// ── Shared response text extractor ──────────────────────────────
-// FIX 3: Single shared helper (was duplicated in batchTranslatePages + translateWithGemini)
-function extractTextFromResponse(obj, collected = []) {
-  if (!obj) return collected;
-  if (typeof obj === "string") {
-    const t = obj.trim();
-    if (t) collected.push(t);
-    return collected;
-  }
-  if (Array.isArray(obj)) {
-    for (const item of obj) extractTextFromResponse(item, collected);
-    return collected;
-  }
-  if (typeof obj === "object") {
-    for (const key of Object.keys(obj)) {
-      const val = obj[key];
-      if (key === "text" || key === "output_text") {
-        if (typeof val === "string" && val.trim()) {
-          collected.push(val.trim());
-          continue;
-        }
-      }
-      if (key === "parts" && Array.isArray(val)) {
-        for (const part of val) {
-          if (part && typeof part.text === "string" && part.text.trim()) {
-            collected.push(part.text.trim());
-          } else {
-            extractTextFromResponse(part, collected);
-          }
-        }
-        continue;
-      }
-      extractTextFromResponse(val, collected);
-    }
-  }
-  return collected;
+// ── Light post-processing for individual translated pages ────────
+// NEVER called on a full batch response (would corrupt PAGE: markers).
+function cleanTranslation(text) {
+  if (!text || typeof text !== "string") return text || "";
+  let out = text;
+  out = out.replace(/\n{3,}/g, "\n\n");          // collapse blank lines
+  out = out.replace(/[ \t]{2,}/g, " ");           // collapse spaces
+  out = out.replace(/\s+([।,;:!?])/g, "$1");      // fix punctuation spacing
+  return out.trim();
 }
 
 // ══════════════════════════════════════════════════════════════════
@@ -205,48 +175,50 @@ function buildBatchPrompt(pages) {
   return parts.join("\n\n");
 }
 
-// ── FIX 4: Fixed batch result lookup ────────────────────────────
-// Returns { pageNumber: translatedText } for each page in the batch.
+// ── Batch translate: returns { pageNumber: banglaText } ─────────
+// • Uses extractGeminiText — only reads candidates[0].content.parts[*].text
+// • Does NOT call cleanTranslation on the full response (would corrupt PAGE: markers)
+// • maxOutputTokens: 8192 so multi-page batches are never truncated
 async function batchTranslatePages(pages) {
   if (!pages || pages.length === 0) return {};
 
-  const SENTINEL  = "---PAGE_BREAK---";
-  const apiUrl    = `${GEMINI_API_URL}?key=${GEMINI_API_KEY}`;
-  const prompt    = buildBatchPrompt(pages);
+  const SENTINEL = "---PAGE_BREAK---";
+  const apiUrl   = `${GEMINI_API_URL}?key=${GEMINI_API_KEY}`;
+  const prompt   = buildBatchPrompt(pages);
 
   const requestBody = {
     contents: [{ role: "user", parts: [{ text: prompt }] }],
-    generationConfig: { temperature: 0.2, maxOutputTokens: 2048 },
+    generationConfig: { temperature: 0.2, maxOutputTokens: 8192 },
   };
 
   const rawResponse = await requestWithRetries(apiUrl, requestBody);
 
-  const pieces = extractTextFromResponse(rawResponse);
-  let joined   = sanitizeModelNoise(pieces.join("\n\n").trim());
-
+  // Clean direct read — no recursive key walking, no ID leakage
+  const fullText  = extractGeminiText(rawResponse);
   const resultMap = {};
-  if (!joined) return resultMap;
+  if (!fullText) return resultMap;
 
-  const segments = joined.split(SENTINEL).map(s => s.trim()).filter(Boolean);
+  // Split on sentinel
+  const segments = fullText.split(SENTINEL).map(s => s.trim()).filter(Boolean);
 
-  // Try PAGE: prefix mapping first
+  // Parse PAGE:N header from each segment
   for (const seg of segments) {
-    const m = seg.match(/^PAGE\s*:\s*(\d+)\s*\n?([\s\S]*)$/i);
+    const m = seg.match(/^PAGE\s*[:\-]?\s*(\d+)[^\n]*\n([\s\S]*)$/i);
     if (m) {
-      const pn   = parseInt(m[1], 10);
-      const text = m[2] ? m[2].trim() : "";
-      if (pn && text) resultMap[pn] = text;
+      const pn = parseInt(m[1], 10);
+      const tx = cleanTranslation(m[2] || "");
+      if (pn && tx) resultMap[pn] = tx;
     }
   }
 
-  // Fallback: sequential mapping if no PAGE: tags found
+  // Fallback: sequential if model omitted PAGE: labels
   if (Object.keys(resultMap).length === 0) {
     for (let i = 0; i < segments.length && i < pages.length; i++) {
-      resultMap[pages[i].pageNumber] = segments[i];
+      resultMap[pages[i].pageNumber] = cleanTranslation(segments[i]);
     }
   }
 
-  // Ensure every page in the batch has an entry
+  // Guarantee every requested page has an entry
   for (const p of pages) {
     if (!resultMap[p.pageNumber]) resultMap[p.pageNumber] = "";
   }
@@ -254,29 +226,26 @@ async function batchTranslatePages(pages) {
   return resultMap;
 }
 
-// ── Single-page translation (test / fallback) ───────────────────
+// ── Single-page translation (API test + per-page fallback) ───────
 async function translateWithGemini(text, isTest = false) {
   if (!GEMINI_API_KEY) throw new Error("API_KEY_MISSING");
 
-  const apiUrl     = `${GEMINI_API_URL}?key=${GEMINI_API_KEY}`;
-  const safeText   = String(text).substring(0, 15000);
+  const apiUrl      = `${GEMINI_API_URL}?key=${GEMINI_API_KEY}`;
+  const safeText    = String(text).substring(0, 15000);
   const requestBody = {
     contents: [{
       role: "user",
       parts: [{
-        text: `Translate this Arabic Islamic text to Bangla. Preserve Islamic meaning. Only return the Bangla translation.\n\n${safeText}`
+        text: `Translate this Arabic Islamic text to Bangla. Preserve Islamic meaning accurately. Output ONLY the Bangla translation — no notes, no commentary.\n\n${safeText}`
       }],
     }],
-    generationConfig: { temperature: 0.2, maxOutputTokens: 1024 },
+    generationConfig: { temperature: 0.2, maxOutputTokens: 4096 },
   };
 
   const rawResponse = await requestWithRetries(apiUrl, requestBody);
   if (isTest) return "API_TEST_SUCCESS";
 
-  const pieces     = extractTextFromResponse(rawResponse);
-  const filtered   = pieces.filter(p => typeof p === "string" && p.length > 8);
-  let translated   = sanitizeModelNoise((filtered.join("\n\n") || pieces.join("\n\n")).trim());
-  return translated || "";
+  return cleanTranslation(extractGeminiText(rawResponse));
 }
 
 // ══════════════════════════════════════════════════════════════════
